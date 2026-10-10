@@ -178,6 +178,8 @@ export interface Impact {
   reductionPct?: number | null;
   direction?: "decreased" | "increased" | "similar";
   estimatedFoodSavedQty?: number;
+  platesSaved?: number | null;
+  co2eKg?: number | null;
   unit?: string;
   label: "observed change";
   caveat?: string;

@@ -36,10 +36,21 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
     Description: One-click demo logins for judges. Only for simulated data.
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email that receives the agent's alerts (AWS sends a confirmation link first). Empty = alerts only show on the dashboard.
+  AppUrl:
+    Type: String
+    Default: https://messloop-web-sitebucket-agfku78revhs.s3.us-east-1.amazonaws.com/index.html
+    Description: Link put in alert emails.
   AllowSeed:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Globals:
   Function:
@@ -64,6 +75,9 @@ Globals:
         # Built from the fixed name, so the functions and the state machine can refer to
         # each other without a circular reference.
         STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:messloop-agent
+        ALERT_TOPIC_ARN: !Ref AlertTopic
+        APP_URL: !Ref AppUrl
+        ALERT_EMAIL_ON: !If [HasAlertEmail, "true", "false"]
 
 Resources:
   Table:
@@ -80,6 +94,21 @@ Resources:
       # New waste records wake the agent (AgentFunction's MealLogged event).
       StreamSpecification:
         StreamViewType: NEW_IMAGE
+
+  # The agent's alerts: a suggestion waiting, a trial result, a missed day.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: messloop-alerts
+      DisplayName: MessLoop
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -105,6 +134,8 @@ Resources:
               Resource: "*"
         - StepFunctionsExecutionPolicy:
             StateMachineName: messloop-agent
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
         - Statement:
             - Effect: Allow
               Action: [states:SendTaskSuccess, states:SendTaskFailure]
@@ -130,11 +161,20 @@ Resources:
             TableName: !Ref Table
         - StepFunctionsExecutionPolicy:
             StateMachineName: messloop-agent
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
         - Statement:
             - Effect: Allow
               Action: [states:SendTaskSuccess, states:SendTaskFailure]
               Resource: "*"
       Events:
+        # Every day at 3 pm in India: remind the committee if no meal was logged.
+        DailyCheck:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 15 * * ? *)
+            ScheduleExpressionTimezone: Asia/Kolkata
+            Input: '{"agentStep":"daily-check"}'
         MealLogged:
           Type: DynamoDB
           Properties:

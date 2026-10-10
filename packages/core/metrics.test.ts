@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  absoluteChange, consumptionPerServing, direction, estimatedFoodSaved,
+  absoluteChange, co2eEstimate, consumptionPerServing, direction, estimatedFoodSaved, platesEquivalent,
   pooledPct, pooledPer100, reductionPct, round, sum, wastePct, wastePer100,
 } from "./metrics.ts";
 import { ALOO_GOBI, POST_CHOLE } from "./seed-data.ts";
@@ -51,6 +51,18 @@ test("post-intervention Chole: −6.98, 38.29%, decreased, 8.38 kg saved", () =>
   assert.equal(round(reductionPct(base, post)!, 2), 38.29);
   assert.equal(direction(change, base), "decreased");
   assert.equal(round(estimatedFoodSaved(base, post, POST_CHOLE.servings), 2), 8.38);
+});
+
+test("food saved as plates and as estimated CO2e (golden)", () => {
+  // 8.376 kg saved ÷ (36.5 kg eaten / 120 plates) = 27.54 plates; × 3.3/1.3 = 21.26 kg CO2e
+  const saved = estimatedFoodSaved(18.230088495575224, 11.25, POST_CHOLE.servings);
+  assert.equal(round(platesEquivalent(saved, [POST_CHOLE])!, 2), 27.54);
+  assert.equal(round(co2eEstimate(saved), 2), 21.26);
+});
+
+test("plates equivalent is null when nothing was eaten", () => {
+  assert.equal(platesEquivalent(5, [{ preparedQty: 10, leftoverQty: 10, servings: 50 }]), null);
+  assert.equal(platesEquivalent(5, []), null);
 });
 
 test("zero baseline: reduction is null, never divided by zero (R8)", () => {

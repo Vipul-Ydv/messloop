@@ -12,12 +12,14 @@ export default function Dashboard() {
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [runNote, setRunNote] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AgentAlert[]>([]);
 
   const load = useCallback(async () => {
     try {
       const [s, r] = await Promise.all([api<Summary>("GET", "/analytics/summary"), api<Recommendation[]>("GET", "/recommendations")]);
       setData(s);
       setRecs(r);
+      api<AgentAlert[]>("GET", "/alerts").then(setAlerts).catch(() => {});
     } catch (e) {
       setError(e);
     }
@@ -175,6 +177,8 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      <AlertsCard alerts={alerts} onChecked={load} />
+
       <div className="grid grid-2">
         <Card delay={440}>
           <h2>Changes being tried</h2>
@@ -274,3 +278,57 @@ function TrendChart({ data }: { data: Summary }) {
 }
 
 const Swatch = ({ c }: { c: string }) => <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 3, background: c, display: "inline-block" }} />;
+
+interface AgentAlert { alertId: string; kind: "suggestion" | "outcome" | "reminder"; title: string; body: string; link?: string; createdAt: string; emailed: boolean }
+
+const ALERT_ICON: Record<AgentAlert["kind"], string> = { suggestion: "💡", outcome: "📈", reminder: "⏰" };
+
+const ago = (iso: string) => {
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+};
+
+/** What the agent sent by itself: suggestions waiting, trial results, missed-day reminders. */
+function AlertsCard({ alerts, onChecked }: { alerts: AgentAlert[]; onChecked: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  async function checkNow() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await api<{ message: string }>("POST", "/alerts/check-now");
+      setNote(r.message);
+      onChecked();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Could not run the check.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card delay={420}>
+      <div className="row between">
+        <h2>Agent notifications</h2>
+        <button className="btn btn-ghost" style={{ minHeight: 40 }} onClick={checkNow} disabled={busy}>{busy ? "Checking…" : "Run today's check now"}</button>
+      </div>
+      <p className="small muted">The agent emails these to the committee (Amazon SNS). Every day at 3 pm it checks whether the meal was logged (EventBridge Scheduler).</p>
+      {note && <p className="note note-info" role="status">{note}</p>}
+      {alerts.length === 0 && <p className="muted">Nothing yet. Log a meal and the agent will report here.</p>}
+      <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 10 }}>
+        {alerts.map((a) => (
+          <li key={a.alertId} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
+            <span aria-hidden="true" style={{ fontSize: 20 }}>{ALERT_ICON[a.kind]}</span>
+            <span className="stack" style={{ gap: 2 }}>
+              <span className="row between" style={{ gap: 8 }}>
+                <strong>{a.title}</strong>
+                <span className="small muted">{ago(a.createdAt)}{a.emailed ? " · emailed" : ""}</span>
+              </span>
+              <span className="small">{a.body}</span>
+              {a.link && <a className="small" href={a.link}>Open →</a>}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}

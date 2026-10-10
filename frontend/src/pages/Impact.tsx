@@ -91,6 +91,23 @@ export default function ImpactPage({ interventionId, role }: { interventionId?: 
                     <span className="small muted">Observed change</span>
                   </div>
                 </div>
+                {imp.platesSaved != null && imp.co2eKg != null && (
+                  <div className="row" style={{ gap: 12, alignItems: "stretch" }}>
+                    <div className="stack" style={{ gap: 2, flex: "1 1 220px", padding: 16, borderRadius: 12, background: "var(--good-soft)" }}>
+                      <span className="small muted">That's about</span>
+                      <span className="num" style={{ fontFamily: "var(--display)", fontSize: 32, fontWeight: 800, color: "var(--good)" }}>{Math.round(imp.platesSaved)} plates</span>
+                      <span className="small">of food not left over · <Lbl kind="Estimated" /></span>
+                    </div>
+                    <div className="stack" style={{ gap: 2, flex: "1 1 220px", padding: 16, borderRadius: 12, background: "var(--good-soft)" }}>
+                      <span className="small muted">and roughly</span>
+                      <span className="num" style={{ fontFamily: "var(--display)", fontSize: 32, fontWeight: 800, color: "var(--good)" }}>{Math.round(imp.co2eKg)} kg CO₂e</span>
+                      <span className="small">kept out of the bin's footprint · <Lbl kind="Estimated" /></span>
+                    </div>
+                    <p className="small muted" style={{ flex: "1 1 100%" }}>
+                      Plates: food saved ÷ what each student actually ate per plate after the change. CO₂e: the global average of 2.5 kg CO₂e per kg of wasted food (FAO, Food Wastage Footprint, 2013), not measured for this mess.
+                    </p>
+                  </div>
+                )}
                 <AgentReport imp={imp} />
                 <p className="note note-warn"><strong>Observed change</strong> — {imp.caveat}</p>
               </>

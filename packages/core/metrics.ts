@@ -56,6 +56,28 @@ export function estimatedFoodSaved(base: number, post: number, postServings: num
   return ((base - post) / 100) * postServings;
 }
 
+/**
+ * Food saved, as plates: divided by what one student actually ate per plate in the
+ * post-change meals. Null when that can't be worked out.
+ */
+export function platesEquivalent(savedQty: number, postRecords: QtyRecord[]): number | null {
+  const eaten = sum(postRecords.map((r) => r.preparedQty - r.leftoverQty));
+  const plates = sum(postRecords.map((r) => r.servings));
+  if (eaten <= 0 || plates <= 0) return null;
+  return savedQty / (eaten / plates);
+}
+
+/**
+ * Global average emissions embedded in wasted food: 3.3 Gt CO2e for 1.3 Gt of food
+ * (FAO 2013, "Food Wastage Footprint: Impacts on Natural Resources"), about 2.54 kg CO2e
+ * per kg. A rough, Estimated figure: it is not specific to this mess or this dish.
+ */
+export const CO2E_PER_KG_FOOD = 3.3 / 1.3;
+
+export function co2eEstimate(savedQty: number): number {
+  return savedQty * CO2E_PER_KG_FOOD;
+}
+
 /** A record with its two derived metrics attached, as it is stored. */
 export function withMetrics<T extends QtyRecord>(r: T): T & { wastePct: number; wastePer100: number } {
   return { ...r, wastePct: wastePct(r.preparedQty, r.leftoverQty), wastePer100: wastePer100(r.leftoverQty, r.servings) };

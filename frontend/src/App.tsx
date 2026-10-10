@@ -9,6 +9,7 @@ import Entry from "./pages/Entry.tsx";
 import Dashboard from "./pages/Dashboard.tsx";
 import Review from "./pages/Review.tsx";
 import ImpactPage from "./pages/Impact.tsx";
+import Feedback from "./pages/Feedback.tsx";
 import { go } from "./nav.ts";
 
 function useHash() {
@@ -21,11 +22,11 @@ function useHash() {
   return hash;
 }
 
-const HOME: Record<Role, string> = { worker: "/entry", manager: "/dashboard", student: "/impact" };
+const HOME: Record<Role, string> = { worker: "/entry", manager: "/dashboard", student: "/feedback" };
 const NAV: Record<Role, [string, string][]> = {
   worker: [["/entry", "Log a meal"]],
   manager: [["/dashboard", "Dashboard"], ["/entry", "Log a meal"], ["/impact", "Impact"]],
-  student: [["/impact", "Impact"]],
+  student: [["/feedback", "Rate today's food"], ["/impact", "What changed"]],
 };
 
 export default function App() {
@@ -49,6 +50,7 @@ export default function App() {
   if (page === "entry") content = <Entry role={session.role} />;
   else if (page === "dashboard") content = <Dashboard />;
   else if (page === "review" && id) content = <Review recId={id} />;
+  else if (page === "feedback") content = <Feedback />;
   else if (page === "impact") content = <ImpactPage interventionId={id} role={session.role} />;
 
   return (

@@ -4,6 +4,8 @@ import { demoLogin, login, requireRole } from "./auth.ts";
 import { HttpError, errorResponse, json, toReq, type Req, type Res } from "./http.ts";
 import * as svc from "./service.ts";
 import * as voice from "./voice.ts";
+import * as alerts from "./alerts.ts";
+import * as feedback from "./feedback.ts";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 type Handler = (req: Req) => Promise<Res>;
@@ -46,6 +48,27 @@ const routes: [string, RegExp, Handler][] = [
   ["POST", /^\/voice\/extract$/, async (req) => {
     requireRole(req, ["worker", "manager"]);
     return json(200, await voice.extractAnswers(req.body));
+  }],
+
+  // Students: how was the dish, and why was food left (anonymous).
+  ["GET", /^\/feedback\/options$/, async (req) => {
+    requireRole(req, ["student", "manager"]);
+    return json(200, await feedback.options());
+  }],
+
+  ["POST", /^\/feedback$/, async (req) => {
+    requireRole(req, ["student"]);
+    return json(201, await feedback.submit(req.body));
+  }],
+
+  ["GET", /^\/alerts$/, async (req) => {
+    requireRole(req, ["manager"]);
+    return json(200, await alerts.listAlerts());
+  }],
+
+  ["POST", /^\/alerts\/check-now$/, async (req) => {
+    requireRole(req, ["manager"]);
+    return json(200, await alerts.dailyCheck({ manual: true }));
   }],
 
   ["GET", /^\/analytics\/summary$/, async (req) => {
@@ -112,6 +135,7 @@ async function agentStep(event: any) {
   if (event.agentStep === "investigate") return svc.agentInvestigate(event.SK);
   if (event.agentStep === "await") return svc.agentAwaitDecision(event.SK, event.taskToken);
   if (event.agentStep === "impact") return svc.agentMeasureImpact(event.interventionId);
+  if (event.agentStep === "daily-check") return alerts.dailyCheck(); // EventBridge Scheduler, 3 pm IST
   throw new Error(`unknown agent step ${event.agentStep}`);
 }
 

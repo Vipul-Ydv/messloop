@@ -4,7 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
-  absoluteChange, direction, estimatedFoodSaved, pooledPct, pooledPer100, reductionPct, sum, withMetrics,
+  absoluteChange, co2eEstimate, direction, estimatedFoodSaved, platesEquivalent, pooledPct, pooledPer100, reductionPct, sum, withMetrics,
 } from "../../packages/core/metrics.ts";
 import { DEFAULT_THRESHOLD, MIN_RECORDS, recurringWaste } from "../../packages/core/rules.ts";
 import { buildEvidence } from "../../packages/core/evidence.ts";
@@ -17,6 +17,7 @@ import { HPK, deleteAllUnder, get, put, putMany, putNew, query, setFields } from
 import { HttpError } from "./http.ts";
 import type { Explanation } from "./ai.ts";
 import { investigate, writeOutcome, type ImpactFacts } from "./agent.ts";
+import { notify } from "./alerts.ts";
 import type { Role } from "./auth.ts";
 
 const sfn = new SFNClient({});
@@ -291,7 +292,19 @@ export async function agentInvestigate(SK: string) {
     aiStatus: "done",
     agent: { ...(rec.agent ?? {}), trace: inv.trace, toolsUsed: inv.toolsUsed },
   }, "pending");
-  return saved ? { source: inv.explanation.source, toolsUsed: inv.toolsUsed } : { skipped: true };
+  if (!saved) return { skipped: true };
+
+  // Tell the manager a suggestion is waiting; the agent does this by itself.
+  const dish = rec.evidence.targetItem.name;
+  const a = inv.explanation.content.suggestedAction;
+  const what = a.type === "replace" && a.replacement ? `replace it with ${a.replacement}` : a.type === "investigate" ? "look into why it is left over" : a.type.replace("_", " ");
+  await notify({
+    kind: "suggestion",
+    title: `Suggestion ready: ${dish}`,
+    body: `${dish} was over ${rec.evidence.threshold}% wasted in ${rec.evidence.rule.exceeded} of its last ${rec.evidence.rule.of} meals. The agent looked into it and suggests: ${what}. Nothing changes until you approve, modify or reject it.`,
+    link: `#/review/${rec.recId}`,
+  }).catch(() => {});
+  return { source: inv.explanation.source, toolsUsed: inv.toolsUsed };
 }
 
 /** Step 2: the run pauses here until the manager decides. */
@@ -343,6 +356,12 @@ export async function agentMeasureImpact(interventionId: string) {
   const summary = await writeOutcome(facts);
   const stored = await get(HPK, `IMPACT#${interventionId}`);
   if (stored) await put({ ...stored, agentSummary: { ...summary, forPostRecordCount: impact.postRecordCount, at: now() } });
+  await notify({
+    kind: "outcome",
+    title: `Trial result: ${facts.dishBefore} to ${facts.dishAfter}`,
+    body: summary.text,
+    link: `#/impact/${interventionId}`,
+  }).catch(() => {});
   return { source: summary.source };
 }
 
@@ -469,6 +488,7 @@ export async function computeImpact(interventionId: string) {
   }
   const postPer100 = pooledPer100(post);
   const change = absoluteChange(postPer100, base);
+  const saved = estimatedFoodSaved(base, postPer100, sum(post.map((r) => r.servings)));
   const impact = {
     PK: HPK,
     SK: `IMPACT#${interventionId}`,
@@ -480,7 +500,10 @@ export async function computeImpact(interventionId: string) {
     absoluteChange: change,
     reductionPct: reductionPct(base, postPer100),
     direction: direction(change, base),
-    estimatedFoodSavedQty: estimatedFoodSaved(base, postPer100, sum(post.map((r) => r.servings))),
+    estimatedFoodSavedQty: saved,
+    // Only meaningful when food was actually saved; both are Estimated.
+    platesSaved: saved > 0 ? platesEquivalent(saved, post) : null,
+    co2eKg: saved > 0 ? co2eEstimate(saved) : null,
     unit: intervention.baseline.unit,
     label: "observed change",
     caveat: `Observed change from ${post.length} post-intervention meal(s). Other factors such as attendance may also have changed.`,
@@ -495,7 +518,7 @@ export async function computeImpact(interventionId: string) {
     agentSummary,
     labels: {
       baselineWastePer100: "Calculated", postWastePer100: "Calculated", absoluteChange: "Calculated",
-      reductionPct: "Calculated", estimatedFoodSavedQty: "Estimated",
+      reductionPct: "Calculated", estimatedFoodSavedQty: "Estimated", platesSaved: "Estimated", co2eKg: "Estimated",
     },
   };
 }

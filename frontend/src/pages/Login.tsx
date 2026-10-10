@@ -5,7 +5,7 @@ import { ErrorNote } from "../ui.tsx";
 const ROLES: { role: Role; label: string; hint: string }[] = [
   { role: "worker", label: "Mess staff", hint: "Log what was cooked and what was left" },
   { role: "manager", label: "Manager", hint: "See waste, review suggestions, decide" },
-  { role: "student", label: "Student", hint: "See what changed and why" },
+  { role: "student", label: "Student", hint: "Rate the food, see what changed" },
 ];
 
 export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
