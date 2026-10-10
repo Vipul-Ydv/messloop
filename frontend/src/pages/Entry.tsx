@@ -111,8 +111,8 @@ export default function Entry({ role }: { role: Role }) {
           <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <button type="button" className="btn" onClick={startCall}
               style={{ minHeight: 120, flexDirection: "column", gap: 6, borderRadius: 20, fontSize: 20, padding: 16 }}>
-              <span aria-hidden="true" style={{ fontSize: 34 }}>📞</span>
-              <span>Call karke batao</span>
+              <span aria-hidden="true" style={{ fontSize: 34 }}>🎙</span>
+              <span>Bol ke batao</span>
               <span style={{ fontWeight: 400, fontSize: 14 }}>The app asks 5 questions in Hindi — just speak</span>
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setMode("form")}
@@ -172,7 +172,7 @@ export default function Entry({ role }: { role: Role }) {
 
           {error && !error.field && <ErrorNote error={error} />}
           <button className="btn" type="submit" disabled={busy || !canPreview || !!hint}>{busy ? "Saving…" : "Save record"}</button>
-          {!heard && <button type="button" className="btn btn-ghost" onClick={startCall}>📞 Rather speak? Call karke batao</button>}
+          {!heard && <button type="button" className="btn btn-ghost" onClick={startCall}>🎙 Rather speak? Bol ke batao</button>}
         </form>
         )}
       </Card>

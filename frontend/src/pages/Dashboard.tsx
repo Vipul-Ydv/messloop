@@ -91,7 +91,7 @@ export default function Dashboard() {
       {runNote && <p className="note note-info" role="status">{runNote}</p>}
       {data.latestDate !== new Date().toLocaleDateString("en-CA") && (
         <p className="note note-warn" role="status">
-          <span aria-hidden="true">⏰</span> Today's meal isn't logged yet. Mess staff can use <a href="#/entry">Voice log</a> (answer out loud in Hindi) or the form.
+          <span aria-hidden="true">⏰</span> Today's meal isn't logged yet. Mess staff can <a href="#/entry">bol ke batao</a> (answer out loud in Hindi) or type it in.
         </p>
       )}
 
