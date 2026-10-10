@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  MessLoop frontend hosting - an S3 static website. Amplify Hosting (the brief's
+  first choice) is at our account's one-app quota, and CloudFront needs account
+  verification we are still waiting for, so the site is served straight from S3.
+  The bucket holds only the built static files; it is public-read and nothing else.
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html # the app routes with #hashes, so the shell handles any path
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadOfBuiltSite
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub ${SiteBucket.Arn}/*
+
+Outputs:
+  SiteUrl:
+    Value: !GetAtt SiteBucket.WebsiteURL
+  BucketName:
+    Value: !Ref SiteBucket

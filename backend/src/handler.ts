@@ -47,12 +47,12 @@ const routes: [string, RegExp, Handler][] = [
   }],
 
   ["GET", /^\/interventions$/, async (req) => {
-    requireRole(req, ["manager"]);
+    requireRole(req, ["manager", "student"]); // students see what changed (§11.1)
     return json(200, await svc.listInterventions());
   }],
 
   ["GET", /^\/interventions\/(?<id>[^/]+)\/impact$/, async (req) => {
-    requireRole(req, ["manager"]);
+    requireRole(req, ["manager", "student"]); // students see what changed (§11.1)
     return json(200, await svc.computeImpact(req.params.id));
   }],
 
@@ -67,6 +67,9 @@ export async function handler(event: any): Promise<Res | void> {
   if (event?.kind === "explain" && typeof event.SK === "string") return svc.explainLater(event.SK);
   try {
     const req = toReq(event);
+    // The catch-all route also receives browser CORS preflights; API Gateway adds the
+    // CORS headers itself, so all we owe it is a success status.
+    if (req.method === "OPTIONS") return { statusCode: 204, headers: {}, body: "" };
     for (const [method, pattern, fn] of routes) {
       const m = req.path.match(pattern);
       if (m && req.method === method) {

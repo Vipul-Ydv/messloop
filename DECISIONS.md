@@ -16,4 +16,9 @@ One line each, as the brief asks (§0.1.5).
 - **Seed:** `includeLatest=false` leaves out the 8 Oct Aloo Gobi record so the demo can log it live; the baseline still lands on 18.23 once it is in.
 - **Seed data lives in `packages/core/seed-data.ts`**, shared by the tests and the backend seed, so the demo and the golden tests cannot drift.
 - **Fallback template:** average rating shown to one decimal.
+- **Frontend hosting:** S3 static website, served over HTTPS from the bucket's S3 endpoint (`infra/frontend-hosting.yaml`). Amplify Hosting is at our account's one-app quota (used by another project) and CloudFront needs account verification, so neither is claimed (R13).
+- **Routing:** hash routes (`#/dashboard`), so the static site needs no server rewrites.
+- **Live preview uses `packages/core`:** the entry form imports `wastePct`/`wastePer100` directly, so the preview and the stored value come from the same code.
+- **Student view:** students can read trials and their impact (`GET /interventions`, `/impact`); everything else stays manager-only.
+- **CORS preflight:** the catch-all route also receives `OPTIONS`; the Lambda answers 204 and API Gateway adds the CORS headers.
 - **Scope cut for time:** no Analytics page and no P1 features; Dashboard carries the core charts.

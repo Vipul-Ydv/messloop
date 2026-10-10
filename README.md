@@ -36,6 +36,25 @@ aws cloudformation package --template-file template.yaml --s3-bucket <bucket> --
 aws cloudformation deploy --stack-name messloop --template-file .aws-sam/packaged.yaml --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND --parameter-overrides AuthSecret=... RoleCodeStudent=... RoleCodeWorker=... RoleCodeManager=... AiBaseUrl=... AiApiKey=...
 ```
 
+## Live
+
+- App: https://messloop-web-sitebucket-agfku78revhs.s3.us-east-1.amazonaws.com/index.html
+- API: https://e6rcj1pacc.execute-api.us-east-1.amazonaws.com
+
+Role codes are shared privately with the team, never in this repo.
+
+## Frontend
+
+```
+cd frontend
+npm install
+npm run dev        # http://localhost:5173, talks to the deployed API
+npm run build
+aws s3 sync dist s3://<BucketName from the messloop-web stack> --delete
+```
+
+Set `VITE_API_URL` to point at a different backend.
+
 ## Layout
 
 ```
