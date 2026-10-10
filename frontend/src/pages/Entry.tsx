@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { wastePct, wastePer100 } from "../../../packages/core/metrics.ts";
 import { ApiError, api, type Item, type Role, type WasteRecord } from "../api.ts";
 import { Card, ErrorNote, Lbl, Loading, Status } from "../ui.tsx";
-import VoiceLog, { type VoiceResult } from "../VoiceLog.tsx";
+import VoiceLog, { unlockAudio, type VoiceResult } from "../VoiceLog.tsx";
 
 const PERIODS = ["breakfast", "lunch", "snacks", "dinner"] as const;
 const SLOT = "lunch_dry_sabzi"; // the one serving slot in the demo hostel
@@ -29,12 +29,19 @@ export default function Entry({ role }: { role: Role }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState<WasteRecord | null>(null);
   const [reason, setReason] = useState("");
-  const [voiceOpen, setVoiceOpen] = useState(false);
+  // "choose" shows the two big buttons; "call" is the voice call; "form" is typing (or checking what the call heard).
+  const [mode, setMode] = useState<"choose" | "call" | "form">("choose");
+  const [callAudio, setCallAudio] = useState<{ audio: HTMLAudioElement; ac: AudioContext } | null>(null);
+  function startCall() {
+    setSaved(null);
+    setCallAudio(unlockAudio()); // must happen inside this tap
+    setMode("call");
+  }
   const [heard, setHeard] = useState<VoiceResult | null>(null);
 
   // Fill the form from the voice log; the worker still checks it and presses Save.
   function applyVoice(r: VoiceResult) {
-    setVoiceOpen(false);
+    setMode("form");
     setHeard(r);
     setSaved(null);
     setError(null);
@@ -82,6 +89,7 @@ export default function Entry({ role }: { role: Role }) {
       });
       setSaved(rec);
       setPrepared(""); setLeftover(""); setServings(""); setReason(""); setHeard(null);
+      setMode("choose");
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "NETWORK", "Could not reach the server. Check your connection and try again."));
     } finally {
@@ -99,20 +107,32 @@ export default function Entry({ role }: { role: Role }) {
           <h1>Log a meal</h1>
           <p className="muted">Weigh what was cooked and what is left in the serving vessels after service.</p>
         </div>
-        {voiceOpen ? (
-          <VoiceLog onResult={applyVoice} onCancel={() => setVoiceOpen(false)} />
-        ) : (
-          <button type="button" className="btn" style={{ minHeight: 64, fontSize: 18, justifyContent: "flex-start", padding: "0 20px" }} onClick={() => setVoiceOpen(true)}>
-            <span aria-hidden="true" style={{ fontSize: 26 }}>🎙</span>
-            <span style={{ textAlign: "left", lineHeight: 1.2 }}>Voice log<br /><span style={{ fontWeight: 400, fontSize: 14 }}>Answer 5 questions out loud in Hindi instead of typing</span></span>
-          </button>
+        {mode === "choose" && (
+          <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+            <button type="button" className="btn" onClick={startCall}
+              style={{ minHeight: 120, flexDirection: "column", gap: 6, borderRadius: 20, fontSize: 20, padding: 16 }}>
+              <span aria-hidden="true" style={{ fontSize: 34 }}>📞</span>
+              <span>Call karke batao</span>
+              <span style={{ fontWeight: 400, fontSize: 14 }}>The app asks 5 questions in Hindi — just speak</span>
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setMode("form")}
+              style={{ minHeight: 120, flexDirection: "column", gap: 6, borderRadius: 20, fontSize: 20, padding: 16, border: "2px solid var(--brand)" }}>
+              <span aria-hidden="true" style={{ fontSize: 34 }}>⌨️</span>
+              <span>Khud likho</span>
+              <span style={{ fontWeight: 400, fontSize: 14 }}>Type the numbers in the form</span>
+            </button>
+          </div>
         )}
-        {heard && (
+        {mode === "call" && callAudio && (
+          <VoiceLog audio={callAudio.audio} ac={callAudio.ac} onResult={applyVoice} onCancel={() => setMode("form")} />
+        )}
+        {mode === "form" && heard && (
           <p className="note note-warn" role="status">
-            <strong>Filled from your voice — check every number before saving.</strong> Speech-to-text can mishear numbers (for example 23 as 30).
+            <strong>Filled from your call — check every number before saving.</strong> Speech-to-text can mishear numbers (for example 23 as 30).
             {heard.note ? <> {heard.note}</> : null}
           </p>
         )}
+        {mode === "form" && (
         <form className="stack" style={{ gap: 18 }} onSubmit={submit} noValidate>
           <div className="field">
             <label htmlFor="date">Date</label>
@@ -152,7 +172,9 @@ export default function Entry({ role }: { role: Role }) {
 
           {error && !error.field && <ErrorNote error={error} />}
           <button className="btn" type="submit" disabled={busy || !canPreview || !!hint}>{busy ? "Saving…" : "Save record"}</button>
+          {!heard && <button type="button" className="btn btn-ghost" onClick={startCall}>📞 Rather speak? Call karke batao</button>}
         </form>
+        )}
       </Card>
 
       <div className="stack" style={{ gap: 16 }}>
