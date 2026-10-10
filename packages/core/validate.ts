@@ -133,6 +133,59 @@ export function parseModelJson(raw: string): unknown {
   }
 }
 
+type Candidate = EvidencePackage["candidates"][number];
+
+const MEASURES: { key: "avgWastePct" | "votePct" | "avgRating"; noun: string; plural: string; up: string[]; down: string[] }[] = [
+  { key: "avgWastePct", noun: "waste", plural: "waste", up: ["higher", "more"], down: ["lower", "less"] },
+  { key: "votePct", noun: "votes?", plural: "votes", up: ["more", "higher"], down: ["fewer", "lower", "less"] },
+  { key: "avgRating", noun: "ratings?", plural: "rating", up: ["higher", "better"], down: ["lower", "worse"] },
+];
+
+/**
+ * Finds "X has lower waste than Y" or "X has the most votes" claims that the candidate
+ * numbers contradict. Each claim is about the dish named closest before it; pros and
+ * cons with no dish before the claim are about their own alternative. Dishes without
+ * numbers (such as the flagged item) are skipped: those claims are left to the reviewer.
+ */
+function falseComparisons(text: string, ownItem: string | undefined, evidence: EvidencePackage): string[] {
+  const lower = text.toLowerCase();
+  const find = (name: string) => evidence.candidates.find((c) => c.name.toLowerCase() === name.trim().toLowerCase());
+  const dishes = [evidence.targetItem.name, ...evidence.candidates.map((c) => c.name)];
+  const mentions = dishes.flatMap((name) =>
+    [...lower.matchAll(new RegExp(name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))].map((x) => ({ name, end: x.index! + name.length })),
+  );
+  const subjectAt = (pos: number): Candidate | undefined => {
+    const before = mentions.filter((x) => x.end <= pos).sort((a, b) => b.end - a.end)[0];
+    return before ? find(before.name) : ownItem ? find(ownItem) : undefined;
+  };
+  const out: string[] = [];
+
+  for (const m of MEASURES) {
+    for (const [words, sign] of [[m.up, 1], [m.down, -1]] as const) {
+      // "lower waste than Chole"
+      const rel = new RegExp(`\\b(${words.join("|")})\\s+(?:(?:average|past)\\s+)?${m.noun}\\s+than\\s+([a-z ]+?)(?=[.,;]|$|\\s+(?:and|but|while|which)\\b)`, "g");
+      for (const hit of lower.matchAll(rel)) {
+        const subject = subjectAt(hit.index!);
+        const other = find(hit[2]);
+        if (!subject || !other || other === subject) continue;
+        if (Math.sign(subject[m.key] - other[m.key]) !== sign) {
+          out.push(`false comparison: ${subject.name} does not have ${hit[1]} ${m.plural} than ${other.name}`);
+        }
+      }
+    }
+    // "the lowest waste", "the most votes"; "second most votes" is a ranking, not a claim to be first.
+    const values = evidence.candidates.map((c) => c[m.key]);
+    for (const [words, extreme, label] of [["most|highest|best", Math.max(...values), "highest"], ["least|lowest|fewest|worst", Math.min(...values), "lowest"]] as const) {
+      const sup = new RegExp(`(?<!second |third |2nd |3rd )\\b(?:${words})\\s+(?:(?:average|past)\\s+)?${m.noun}\\b`, "g");
+      for (const hit of lower.matchAll(sup)) {
+        const subject = subjectAt(hit.index!);
+        if (subject && subject[m.key] !== extreme) out.push(`false comparison: ${subject.name} does not have the ${label} ${m.plural}`);
+      }
+    }
+  }
+  return out;
+}
+
 export function validateAiOutput(raw: unknown, evidence: EvidencePackage): Result<AiRecommendationJson, string[]> {
   let o: unknown = raw;
   if (typeof raw === "string") {
@@ -183,6 +236,42 @@ export function validateAiOutput(raw: unknown, evidence: EvidencePackage): Resul
   for (const a of alts as { item: string }[]) {
     if (!candidateKeys.has(norm(a.item))) problems.push(`alternative "${a.item}" is not a candidate`);
   }
+
+  // The action must be internally consistent, and never rest on a thin comparison (§10.3 rule 2).
+  if (action!.type === "replace" && !isString(action!.replacement)) problems.push("a replace action needs a replacement");
+  if (action!.type !== "replace" && action!.replacement !== null) problems.push("only a replace action may name a replacement");
+  if (isString(action!.replacement)) {
+    const c = evidence.candidates.find((x) => [norm(x.name), norm(x.itemId)].includes(norm(action!.replacement as string)));
+    if (c && c.occurrences < 3) problems.push(`replacement ${c.name} has fewer than 3 occurrences`);
+  }
+
+  // Vote shares must belong to the dish they are attributed to. A small model can
+  // quote the right number about the wrong dish, which the numeric check alone misses.
+  const sentences = [...(r.supportingEvidence as string[]), ...String(r.reasoning).split(/(?<=[.!?])\s+/)];
+  const dishes = [
+    { name: target.name, votePct: null as number | null },
+    ...evidence.candidates.map((c) => ({ name: c.name, votePct: c.votePct })),
+  ];
+  for (const s of sentences) {
+    if (!/vote/i.test(s)) continue;
+    const named = dishes.filter((d) => s.toLowerCase().includes(d.name.toLowerCase()));
+    if (named.length !== 1) continue; // several dishes: cannot attribute safely, leave to the numeric check
+    for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
+      const n = Number(m[1]);
+      const share = named[0].votePct;
+      if (share === null || Math.abs(share - n) > 0.5) problems.push(`vote share ${n}% does not belong to ${named[0].name}`);
+    }
+  }
+
+  // Comparisons between candidates must match their numbers. Pros and cons are read as
+  // being about their own alternative; other sentences as being about the dish named first.
+  const claims: { subject?: string; text: string }[] = [
+    ...sentences.map((text) => ({ text })),
+    ...(alts as { item: string; pros: string[]; cons: string[] }[]).flatMap((a) =>
+      [...a.pros, ...a.cons].map((text) => ({ subject: a.item, text })),
+    ),
+  ];
+  for (const c of claims) problems.push(...falseComparisons(c.text, c.subject, evidence));
 
   // 5. Numbers must come from the evidence (R2)
   const known = evidenceNumbers(evidence);
