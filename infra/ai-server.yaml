@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  MessLoop - our own language model on Amazon EC2. llama.cpp serves
+  Qwen3-4B (Apache-2.0) behind an OpenAI-compatible API, protected
+  by an API key. The app's Lambda calls it only to explain evidence; it never
+  sees or changes the database.
+
+Parameters:
+  ApiKey:
+    Type: String
+    NoEcho: true
+    MinLength: 24
+    Description: Bearer key the Lambda sends. Generate a random one; never commit it.
+  InstanceType:
+    Type: String
+    Default: c7i.2xlarge
+    Description: 8 vCPU / 16 GB runs a 4B model on CPU at a usable speed.
+  ModelUrl:
+    Type: String
+    Default: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  ModelSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MessLoop model API (API-key protected). No SSH; use SSM Session Manager.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+
+  ModelRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  ModelInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref ModelRole]
+
+  ModelInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref ModelInstanceProfile
+      SecurityGroupIds: [!GetAtt ModelSecurityGroup.GroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3 }
+      Tags:
+        - { Key: Name, Value: messloop-model }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf install -y docker
+          systemctl enable --now docker
+          mkdir -p /models
+          curl -fL --retry 5 -o /models/model.gguf "${ModelUrl}"
+          docker run -d --name llm --restart unless-stopped -p 8080:8080 -v /models:/models \
+            ghcr.io/ggml-org/llama.cpp:server \
+            -m /models/model.gguf --host 0.0.0.0 --port 8080 \
+            --api-key "${ApiKey}" -c 4096 -t 4 -tb 8 --jinja
+
+  ModelAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref ModelInstance
+
+Outputs:
+  ModelBaseUrl:
+    Description: OpenAI-compatible base URL for the Lambda's AI_BASE_URL
+    Value: !Sub "http://${ModelAddress}:8080/v1"
+  InstanceId:
+    Value: !Ref ModelInstance

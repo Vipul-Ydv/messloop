@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MessLoop - hostel mess food-waste loop. HTTP API, one Lambda, one DynamoDB table.
+
+Parameters:
+  AuthSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: HMAC key for session tokens. Random, at least 32 characters.
+  RoleCodeStudent:
+    Type: String
+    NoEcho: true
+    MinLength: 4
+  RoleCodeWorker:
+    Type: String
+    NoEcho: true
+    MinLength: 4
+  RoleCodeManager:
+    Type: String
+    NoEcho: true
+    MinLength: 4
+  AiBaseUrl:
+    Type: String
+    Default: ""
+    Description: OpenAI-compatible base URL of our own model (infra/ai-server.yaml output). Empty = template fallback only.
+  AiApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  AiModel:
+    Type: String
+    Default: qwen3-4b
+  AllowSeed:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: messloop
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, OPTIONS]
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # Named so the function can invoke itself without a circular reference.
+      FunctionName: messloop-api
+      CodeUri: backend/dist
+      Handler: handler.handler
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      MemorySize: 512
+      # HTTP requests are still cut off at 30 s by API Gateway; the extra time is for
+      # the asynchronous AI explanation, which runs outside any request.
+      Timeout: 90
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+          HOSTEL_ID: demo-hostel
+          AUTH_SECRET: !Ref AuthSecret
+          ROLE_CODE_STUDENT: !Ref RoleCodeStudent
+          ROLE_CODE_WORKER: !Ref RoleCodeWorker
+          ROLE_CODE_MANAGER: !Ref RoleCodeManager
+          AI_BASE_URL: !Ref AiBaseUrl
+          AI_API_KEY: !Ref AiApiKey
+          AI_MODEL: !Ref AiModel
+          AI_TIMEOUT_MS: "75000"
+          ALLOW_SEED: !Ref AllowSeed
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:messloop-api
+      # Never retry a background explanation: a second run would just repeat the same call.
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Events:
+        Proxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: /{proxy+}
+            Method: ANY
+
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      RetentionInDays: 7
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com
+  TableName:
+    Value: !Ref Table

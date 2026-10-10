@@ -2,7 +2,12 @@
 
 One line each, as the brief asks (§0.1.5).
 
-- **AI provider:** our own model — Qwen2.5-1.5B-Instruct (Apache-2.0) served by llama.cpp on Amazon EC2, called through its OpenAI-compatible API. Bedrock is `NOT_AUTHORIZED` on our account, so per R13 it is not claimed anywhere.
+- **AI provider:** our own model — Qwen3-4B (Apache-2.0, Q4_K_M) served by llama.cpp on an Amazon EC2 c7i.2xlarge, called through its OpenAI-compatible API with a JSON-schema grammar. Bedrock is `NOT_AUTHORIZED` on our account, so per R13 it is not claimed anywhere.
+- **Model size:** Qwen2.5-1.5B was tried first; it was fast enough but attributed vote shares to the wrong dish. Qwen3-4B gets the facts right at ~9 tokens/s on CPU.
+- **Thinking off:** Qwen3's reasoning mode is disabled per request (`enable_thinking: false`); the evidence is already computed, so it only adds latency.
+- **AI runs in the background:** a model answer takes ~25 s, close to API Gateway's 30 s cap. `generate` stores the recommendation at once with the deterministic template (`aiStatus: "running"`), then the Lambda invokes itself asynchronously to ask the model and swap in the validated text. Decisions are refused while it runs; after 2 minutes a run is treated as finished so it can never block the manager.
+- **Extra validator checks:** a replace action must name a replacement (and only a replace may); a replacement needs at least 3 occurrences; a vote share must belong to the dish it is written next to; comparisons between candidates ("lower waste than", "most votes") must match their numbers, attributed to the dish named just before the claim.
+- **Prompt shape guide:** the spec's system prompt stays verbatim; a placeholder template in the user message asks for each alternative's own numbers rather than comparisons, which a small model gets wrong.
 - **Tests:** Node's built-in runner with `--experimental-strip-types` — no test dependencies.
 - **Validator constants:** the numbers 100 ("per 100 servings"), 5 ("out of 5") and 3 (the rules' minimum) may appear in model text without being in the evidence.
 - **Validator tolerance:** a model number matches an evidence number if it is within 0.05, i.e. rounded to one decimal.

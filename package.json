@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test --experimental-strip-types --no-warnings packages/core/*.test.ts"
+    "test": "node --test --experimental-strip-types --no-warnings packages/core/*.test.ts",
+    "build:backend": "esbuild backend/src/handler.ts --bundle --platform=node --target=node22 --format=cjs --outfile=backend/dist/handler.js --external:@aws-sdk/* --sourcemap"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

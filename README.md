@@ -18,6 +18,24 @@ npm test
 The golden numbers from the spec (baseline 18.23 per 100 servings, post 11.25,
 change −6.98, reduction 38.29%) are reproduced exactly in `packages/core/*.test.ts`.
 
+## How the AI part works
+
+Code finds the problem and computes every number. Our own model (Qwen3-4B on EC2,
+see `infra/ai-server.yaml`) only turns that evidence into a short explanation. Its
+answer is checked before it is stored: shape, names, every number, vote shares,
+comparisons and certainty language. Anything that fails is replaced by a rule-based
+template, so a wrong AI answer never reaches the manager. The model call runs in the
+background, so `POST /recommendations/generate` returns at once; poll
+`GET /recommendations` until `aiStatus` is `done`.
+
+## Deploy
+
+```
+npm run build:backend
+aws cloudformation package --template-file template.yaml --s3-bucket <bucket> --output-template-file .aws-sam/packaged.yaml
+aws cloudformation deploy --stack-name messloop --template-file .aws-sam/packaged.yaml --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND --parameter-overrides AuthSecret=... RoleCodeStudent=... RoleCodeWorker=... RoleCodeManager=... AiBaseUrl=... AiApiKey=...
+```
+
 ## Layout
 
 ```
