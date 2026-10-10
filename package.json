@@ -1,0 +1,8 @@
+{
+  "name": "messloop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --experimental-strip-types --no-warnings packages/core/*.test.ts"
+  }
+}
