@@ -1,10 +1,11 @@
 // Meal & waste entry (worker). Built for a phone held in one hand: big targets, today's
 // date and the current meal pre-filled, and a live preview before anything is saved.
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { wastePct, wastePer100 } from "../../../packages/core/metrics.ts";
 import { ApiError, api, type Item, type Role, type WasteRecord } from "../api.ts";
 import { Card, ErrorNote, Lbl, Loading, Status } from "../ui.tsx";
+import VoiceLog, { type VoiceResult } from "../VoiceLog.tsx";
 
 const PERIODS = ["breakfast", "lunch", "snacks", "dinner"] as const;
 const SLOT = "lunch_dry_sabzi"; // the one serving slot in the demo hostel
@@ -27,6 +28,23 @@ export default function Entry({ role }: { role: Role }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [saved, setSaved] = useState<WasteRecord | null>(null);
+  const [reason, setReason] = useState("");
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [heard, setHeard] = useState<VoiceResult | null>(null);
+
+  // Fill the form from the voice log; the worker still checks it and presses Save.
+  function applyVoice(r: VoiceResult) {
+    setVoiceOpen(false);
+    setHeard(r);
+    setSaved(null);
+    setError(null);
+    if (r.fields.itemId) setItemId(r.fields.itemId);
+    setPrepared(r.fields.preparedQty === null ? "" : String(r.fields.preparedQty));
+    setLeftover(r.fields.leftoverQty === null ? "" : String(r.fields.leftoverQty));
+    setServings(r.fields.servings === null ? "" : String(r.fields.servings));
+    setReason(r.fields.reason ?? "");
+  }
+  const heardFor = (q: string) => (heard?.transcripts[q] ? <span className="hint" lang="hi">Heard: “{heard.transcripts[q]}”</span> : null);
 
   useEffect(() => {
     api<Item[]>("GET", "/items")
@@ -60,9 +78,10 @@ export default function Entry({ role }: { role: Role }) {
     try {
       const rec = await api<WasteRecord>("POST", "/waste-records", {
         date, period, slotId: SLOT, itemId, preparedQty: p, leftoverQty: l, servings: s, unit: item?.unit,
+        reason: reason.trim() || undefined, entryMethod: heard ? "voice" : "form",
       });
       setSaved(rec);
-      setPrepared(""); setLeftover(""); setServings("");
+      setPrepared(""); setLeftover(""); setServings(""); setReason(""); setHeard(null);
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "NETWORK", "Could not reach the server. Check your connection and try again."));
     } finally {
@@ -80,6 +99,20 @@ export default function Entry({ role }: { role: Role }) {
           <h1>Log a meal</h1>
           <p className="muted">Weigh what was cooked and what is left in the serving vessels after service.</p>
         </div>
+        {voiceOpen ? (
+          <VoiceLog onResult={applyVoice} onCancel={() => setVoiceOpen(false)} />
+        ) : (
+          <button type="button" className="btn" style={{ minHeight: 64, fontSize: 18, justifyContent: "flex-start", padding: "0 20px" }} onClick={() => setVoiceOpen(true)}>
+            <span aria-hidden="true" style={{ fontSize: 26 }}>🎙</span>
+            <span style={{ textAlign: "left", lineHeight: 1.2 }}>Voice log<br /><span style={{ fontWeight: 400, fontSize: 14 }}>Answer 5 questions out loud in Hindi instead of typing</span></span>
+          </button>
+        )}
+        {heard && (
+          <p className="note note-warn" role="status">
+            <strong>Filled from your voice — check every number before saving.</strong> Speech-to-text can mishear numbers (for example 23 as 30).
+            {heard.note ? <> {heard.note}</> : null}
+          </p>
+        )}
         <form className="stack" style={{ gap: 18 }} onSubmit={submit} noValidate>
           <div className="field">
             <label htmlFor="date">Date</label>
@@ -102,12 +135,19 @@ export default function Entry({ role }: { role: Role }) {
               {items.map((i) => <option key={i.itemId} value={i.itemId}>{i.name}</option>)}
             </select>
             <span className="hint">Measured in {item?.unit ?? "—"}. Units are never mixed.</span>
+            {heardFor("dish")}
           </div>
 
           <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
-            <NumberField id="prepared" label={`Cooked (${item?.unit ?? ""})`} value={prepared} onChange={setPrepared} error={fieldError("preparedQty")} />
-            <NumberField id="leftover" label={`Left over (${item?.unit ?? ""})`} value={leftover} onChange={setLeftover} error={fieldError("leftoverQty")} />
-            <NumberField id="servings" label="Plates served" value={servings} onChange={setServings} error={fieldError("servings")} step="1" />
+            <NumberField id="prepared" label={`Cooked (${item?.unit ?? ""})`} value={prepared} onChange={setPrepared} error={fieldError("preparedQty")} heard={heardFor("prepared")} />
+            <NumberField id="leftover" label={`Left over (${item?.unit ?? ""})`} value={leftover} onChange={setLeftover} error={fieldError("leftoverQty")} heard={heardFor("leftover")} />
+            <NumberField id="servings" label="Plates served" value={servings} onChange={setServings} error={fieldError("servings")} step="1" heard={heardFor("servings")} />
+          </div>
+
+          <div className="field">
+            <label htmlFor="reason">Why was it left? <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></label>
+            <input id="reason" className="input" style={{ fontSize: 16 }} value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder="e.g. too spicy, came out cold" />
+            {heardFor("reason")}
           </div>
 
           {error && !error.field && <ErrorNote error={error} />}
@@ -151,12 +191,13 @@ export default function Entry({ role }: { role: Role }) {
   );
 }
 
-function NumberField({ id, label, value, onChange, error, step = "0.1" }: { id: string; label: string; value: string; onChange: (v: string) => void; error: string | null; step?: string }) {
+function NumberField({ id, label, value, onChange, error, step = "0.1", heard }: { id: string; label: string; value: string; onChange: (v: string) => void; error: string | null; step?: string; heard?: ReactNode }) {
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
       <input id={id} className="input num" type="number" inputMode="decimal" min="0" step={step} value={value} onChange={(e) => onChange(e.target.value)} aria-invalid={!!error} aria-describedby={error ? `${id}-err` : undefined} required />
       {error && <span id={`${id}-err`} className="field-error">{error}</span>}
+      {heard}
     </div>
   );
 }

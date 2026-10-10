@@ -89,6 +89,11 @@ export default function Dashboard() {
         </div>
       </div>
       {runNote && <p className="note note-info" role="status">{runNote}</p>}
+      {data.latestDate !== new Date().toLocaleDateString("en-CA") && (
+        <p className="note note-warn" role="status">
+          <span aria-hidden="true">⏰</span> Today's meal isn't logged yet. Mess staff can use <a href="#/entry">Voice log</a> (answer out loud in Hindi) or the form.
+        </p>
+      )}
 
       <div className="grid grid-4">
         <Card delay={0}>

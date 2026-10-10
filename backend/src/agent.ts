@@ -69,7 +69,7 @@ function evidenceSeen(e: EvidencePackage, seen: Set<ToolName>): EvidencePackage 
   };
 }
 
-async function chat(body: unknown, timeoutMs: number) {
+export async function chat(body: unknown, timeoutMs: number) {
   const base = process.env.AI_BASE_URL;
   if (!base) throw new Error("AI_BASE_URL not configured");
   const controller = new AbortController();

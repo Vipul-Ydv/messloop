@@ -71,6 +71,9 @@ export async function createWasteRecord(body: unknown, role: Role) {
     interventionId: tagged?.interventionId,
     loggedBy: role,
     loggedAt: now(),
+    // Optional extras from the voice log or the form: why it was left, and how it was entered.
+    staffReason: typeof (body as any)?.reason === "string" && (body as any).reason.trim() ? (body as any).reason.trim().slice(0, 200) : undefined,
+    entryMethod: (body as any)?.entryMethod === "voice" ? "voice" : "form",
     isSimulated: false,
   };
   await putNew(record, `A record for ${item!.name} at ${input.period} on ${input.date} already exists.`);

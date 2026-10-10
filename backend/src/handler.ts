@@ -3,6 +3,7 @@
 import { demoLogin, login, requireRole } from "./auth.ts";
 import { HttpError, errorResponse, json, toReq, type Req, type Res } from "./http.ts";
 import * as svc from "./service.ts";
+import * as voice from "./voice.ts";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 type Handler = (req: Req) => Promise<Res>;
@@ -29,6 +30,22 @@ const routes: [string, RegExp, Handler][] = [
   ["GET", /^\/waste-records$/, async (req) => {
     requireRole(req, ["worker", "manager"]);
     return json(200, await svc.listWasteRecords(req.query));
+  }],
+
+  // Voice log: spoken questions, recorded answers, transcripts, extracted fields (never saved here).
+  ["GET", /^\/voice\/prompts$/, async (req) => {
+    requireRole(req, ["worker", "manager"]);
+    return json(200, await voice.prompts());
+  }],
+
+  ["POST", /^\/voice\/sessions$/, async (req) => {
+    requireRole(req, ["worker", "manager"]);
+    return json(201, await voice.startSession(req.body));
+  }],
+
+  ["GET", /^\/voice\/sessions\/(?<id>[^/]+)$/, async (req) => {
+    requireRole(req, ["worker", "manager"]);
+    return json(200, await voice.getSession(req.params.id));
   }],
 
   ["GET", /^\/analytics\/summary$/, async (req) => {

@@ -14,9 +14,10 @@ export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  const [demoMode, setDemoMode] = useState(false);
+  // Demo mode is on by default; show the buttons at once and hide them only if the server says otherwise.
+  const [demoMode, setDemoMode] = useState(true);
   useEffect(() => {
-    api<{ demoMode: boolean }>("GET", "/auth/config").then((c) => setDemoMode(c.demoMode)).catch(() => setDemoMode(false));
+    api<{ demoMode: boolean }>("GET", "/auth/config").then((c) => setDemoMode(c.demoMode)).catch(() => {});
   }, []);
 
   async function tryDemo(r: Role) {

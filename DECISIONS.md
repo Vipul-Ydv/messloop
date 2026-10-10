@@ -28,4 +28,8 @@ One line each, as the brief asks (§0.1.5).
 - **Field-level writes:** the pause token and the decision are written with DynamoDB update expressions (decision-side conditional on `pending`), so the two can't overwrite each other.
 - **Outcome report:** after a trial meal the agent writes one sentence about what changed (numbers checked, must say "per 100 plates"); code always appends the observed-change caveat, so the model can't drop it.
 - **Demo mode:** one-click demo logins (`POST /auth/demo`, `DemoMode` parameter, on by default) because a judge without a role code got stuck at DTU. Safe only because all demo data is simulated and a manager can reset it; turn it off for real data.
+- **Voice log instead of a phone call:** mess staff answer five spoken Hindi questions in the app (Amazon Polly, voice Kajal) and their answers go to Amazon Transcribe (hi-IN); our model turns the transcripts into form fields. A real phone line (Amazon Connect) is the next step: new-account limits and Indian number paperwork made it too risky for the deadline.
+- **Voice never saves on its own:** the extracted values fill the form with "Heard: …" under each field, and the worker presses Save. In testing, Transcribe heard "तेईस" (23) as "30", which is exactly why.
+- **Recordings are short-lived:** clips go to a private S3 bucket and are deleted as soon as they are transcribed (bucket lifecycle deletes anything left after one day); transcription jobs are deleted too.
+- **Staff reason and entry method** are stored on the waste record (`staffReason`, `entryMethod: voice|form`); they are not yet part of the evidence the model sees.
 - **Scope cut for time:** no Analytics page and no P1 features; Dashboard carries the core charts.
