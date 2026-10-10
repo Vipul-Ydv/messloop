@@ -10,7 +10,7 @@ interface Question { id: string; text: string; english: string; audio: string }
 export interface VoiceFields { itemId: string | null; preparedQty: number | null; leftoverQty: number | null; servings: number | null; reason: string | null }
 export interface VoiceResult { fields: VoiceFields; transcripts: Record<string, string>; note?: string }
 
-type Phase = "connecting" | "asking" | "listening" | "sending" | "reading" | "error";
+type Phase = "connecting" | "asking" | "listening" | "reading" | "error";
 
 // Listening rules: wait up to NO_SPEECH_MS for the worker to start; once they have spoken,
 // a pause of SILENCE_MS ends the answer; no answer runs longer than MAX_ANSWER_MS.
@@ -21,15 +21,24 @@ const MAX_ANSWER_MS = 20000;
 const pickMime = () =>
   ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) ?? "";
 
-const toBase64 = (blob: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
-    r.onerror = reject;
-    r.readAsDataURL(blob);
-  });
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Recorded answer → 16 kHz mono 16-bit PCM, base64: what streaming transcription takes. */
+async function toPcm16k(blob: Blob, ac: AudioContext): Promise<string> {
+  const decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const samples = (await off.startRendering()).getChannelData(0);
+  const pcm = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) pcm[i] = Math.max(-1, Math.min(1, samples[i])) * 0x7fff;
+  const bytes = new Uint8Array(pcm.buffer);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
 /**
  * Phones only allow sound that starts from a tap, so the "Call" button calls this in its
@@ -50,6 +59,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
   const [level, setLevel] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [heard, setHeard] = useState<{ q: string; text: string } | null>(null);
 
   const ended = useRef(false);
   const skip = useRef<() => void>(() => {});
@@ -99,7 +109,19 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
           return Math.sqrt(sum / buf.length);
         };
 
-        const clips: { questionId: string; blob: Blob; mime: string }[] = [];
+        const transcripts: Record<string, string> = {};
+        const pending: Promise<void>[] = [];
+        const send = (questionId: string, blob: Blob) =>
+          (async () => {
+            try {
+              const pcmBase64 = await toPcm16k(blob, ac);
+              const r = await api<{ text: string }>("POST", "/voice/transcribe", { questionId, pcmBase64 });
+              transcripts[questionId] = r.text;
+              if (r.text && run.alive) setHeard({ q: questionId, text: r.text });
+            } catch {
+              transcripts[questionId] = ""; // the worker fills this one in the form
+            }
+          })();
         for (let i = 0; i < p.questions.length && !stopped(); i++) {
           const q = p.questions[i];
           setIndex(i);
@@ -115,28 +137,21 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
           setPhase("listening");
           const clip = await listen(mic, rms, setLevel, skip);
           setLevel(0);
-          if (clip) clips.push({ questionId: q.id, ...clip });
+          if (clip) pending.push(send(q.id, clip.blob));
         }
 
         mic.getTracks().forEach((t) => t.stop());
-        if (!run.alive || (ended.current && clips.length === 0)) return;
-        if (clips.length === 0) throw new Error("Nothing was heard. Please type instead.");
+        if (!run.alive || (ended.current && pending.length === 0)) return;
+        if (pending.length === 0) throw new Error("Nothing was heard. Please type instead.");
 
-        setPhase("sending");
-        const body = { clips: await Promise.all(clips.map(async (c) => ({ questionId: c.questionId, mime: c.mime, audioBase64: await toBase64(c.blob) }))) };
-        const { sessionId } = await api<{ sessionId: string }>("POST", "/voice/sessions", body);
+        // Most answers are text already; wait for the last one, then read the numbers.
         setPhase("reading");
-        // One request at a time: the last step (our model reading the answers) takes a few seconds.
-        for (let tries = 0; tries < 40; tries++) {
-          await sleep(3000);
-          if (!run.alive) return;
-          const s = await api<{ status: string; fields: VoiceFields; transcripts: Record<string, string>; extractionNote?: string }>("GET", `/voice/sessions/${sessionId}`);
-          if (s.status === "done") {
-            onResult({ fields: s.fields, transcripts: s.transcripts, note: s.extractionNote });
-            return;
-          }
-        }
-        throw new Error("This is taking too long. Please type instead.");
+        await Promise.all(pending);
+        if (!run.alive) return;
+        const out = await api<{ fields: VoiceFields; note?: string }>("POST", "/voice/extract", { transcripts });
+        onResult({ fields: out.fields, transcripts, note: out.note });
+        return;
+
       } catch (e: any) {
         if (stopped()) return;
         setError(e?.name === "NotAllowedError" ? "Microphone permission was blocked. Allow it in the browser, or type instead." : e?.message ?? "The call could not continue. Please type instead.");
@@ -160,8 +175,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
     phase === "connecting" ? "Connecting…"
     : phase === "asking" ? "Asking…"
     : phase === "listening" ? "Listening — speak now"
-    : phase === "sending" ? "Sending your answers…"
-    : phase === "reading" ? "Understanding your answers…"
+    : phase === "reading" ? "Filling the form…"
     : "Call ended";
 
   return (
@@ -188,8 +202,12 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
       )}
 
       {phase === "listening" && <MicLevel level={level} />}
-      {(phase === "sending" || phase === "reading" || phase === "connecting") && <span className="spinner" style={{ width: 28, height: 28 }} aria-hidden="true" />}
-      {phase === "reading" && <p style={{ color: "#9FB0A7", fontSize: 14 }}>Amazon Transcribe (Hindi), then our own model. About 20 seconds.</p>}
+      {(phase === "reading" || phase === "connecting") && <span className="spinner" style={{ width: 28, height: 28 }} aria-hidden="true" />}
+      {heard && phase !== "error" && phase !== "reading" && (
+        <p lang="hi" style={{ color: "#C9D2CD", fontSize: 15, background: "#232D28", padding: "8px 14px", borderRadius: 12 }}>
+          <span style={{ color: "#7FD29C" }}>✓ Suna:</span> {heard.text}
+        </p>
+      )}
       {phase === "error" && <p role="alert" style={{ background: "#3B211B", color: "#F08A72", padding: "10px 14px", borderRadius: 12 }}>{error}</p>}
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
@@ -198,7 +216,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
             Next question ›
           </button>
         )}
-        {phase !== "sending" && phase !== "reading" && (
+        {phase !== "reading" && (
           <button type="button" onClick={() => { hangUp(); onCancel(); }} aria-label="End call and type instead"
             style={{ minHeight: 64, padding: "0 28px", borderRadius: 999, border: 0, background: "#C2412D", color: "#fff", font: "inherit", fontWeight: 700, fontSize: 18, cursor: "pointer" }}>
             {phase === "error" ? "Type instead" : "✕ End call"}

@@ -39,9 +39,9 @@ Logging a meal wakes the waste agent (DynamoDB Streams → Lambda → AWS Step F
 
 Judges can click "Try the demo" on the login page; all demo data is simulated.
 
-## Voice log
+## Voice call
 
-Busy mess staff can log a meal by talking instead of typing. The app asks five questions out loud in Hindi (Amazon Polly): what was cooked, how many kg, how many kg were left, how many plates, and why it was left. The answers are transcribed (Amazon Transcribe, hi-IN) and our model fills the form. The worker checks it and presses Save; speech-to-text can mishear numbers, so nothing is saved automatically. Missed it? The form is always there, and the dashboard shows when today's meal hasn't been logged.
+Busy mess staff can log a meal by talking instead of typing. Tap "Call karke batao" and the app runs it like a phone call: it asks five questions out loud in Hindi (Amazon Polly), beeps, listens, and moves on by itself when you stop talking. Each answer is transcribed while the next question plays (Amazon Transcribe streaming, hi-IN), simple rules read the numbers, and the form is filled about two seconds after you hang up. The worker checks it and presses Save; speech-to-text can mishear numbers, so nothing is saved automatically, and no recording is kept. Missed it? "Khud likho" opens the form, and the dashboard shows when today's meal hasn't been logged.
 
 ## Deploy
 

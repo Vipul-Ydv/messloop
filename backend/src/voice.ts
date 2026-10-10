@@ -1,19 +1,18 @@
-// Voice log: the app asks mess staff the day's questions out loud in Hindi (Amazon
-// Polly), records each answer, turns it into text (Amazon Transcribe, hi-IN), and our
-// model pulls out the numbers. Nothing is saved from here: the worker sees the filled
-// form and confirms it, because speech-to-text can mishear "50" as "15" (R15).
+// Voice call: the app asks mess staff the day's questions out loud in Hindi (Amazon
+// Polly), each answer is transcribed as it ends (Amazon Transcribe streaming, hi-IN),
+// and rules — or, if needed, our model — read the numbers. Nothing is saved from here,
+// and no recording is stored: the worker sees the filled form and confirms it, because
+// speech-to-text can mishear "23" as "30" (R15).
 
-import { randomUUID } from "node:crypto";
 import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { DeleteTranscriptionJobCommand, GetTranscriptionJobCommand, StartTranscriptionJobCommand, TranscribeClient } from "@aws-sdk/client-transcribe";
-import { HPK, get, put, query } from "./db.ts";
+import { StartStreamTranscriptionCommand, TranscribeStreamingClient } from "@aws-sdk/client-transcribe-streaming";
+import { parseAnswers } from "../../packages/core/voice-parse.ts";
+import { HPK, query } from "./db.ts";
 import { HttpError } from "./http.ts";
 import { chat } from "./agent.ts";
 
 const polly = new PollyClient({});
-const s3 = new S3Client({});
-const transcribe = new TranscribeClient({});
+const streaming = new TranscribeStreamingClient({});
 
 export const QUESTIONS = [
   { id: "dish", text: "नमस्ते! आज कौन सी सब्ज़ी बनी?", english: "Hello! Which sabzi was made today?" },
@@ -36,79 +35,6 @@ export async function prompts() {
     return { ...q, audio: Buffer.from(bytes).toString("base64") };
   }));
   return { questions: promptCache };
-}
-
-const FORMATS: Record<string, string> = { webm: "webm", ogg: "ogg", mp4: "mp4", m4a: "m4a", mpeg: "mp3", mp3: "mp3", wav: "wav", "x-wav": "wav" };
-const MAX_CLIP_BYTES = 1_500_000; // about a minute and a half of compressed speech
-
-/** Stores the recorded answers and starts one Hindi transcription job per answer. */
-export async function startSession(body: any) {
-  const clips: any[] = Array.isArray(body?.clips) ? body.clips : [];
-  if (clips.length === 0 || clips.length > QUESTIONS.length) throw new HttpError(400, "VALIDATION_ERROR", "Send between 1 and 5 recorded answers.", "clips");
-  const bucket = process.env.VOICE_BUCKET;
-  if (!bucket) throw new HttpError(503, "UNAVAILABLE", "Voice log is not configured.");
-
-  const sessionId = randomUUID();
-  // Check every clip first, then upload and start all transcriptions in parallel.
-  const prepared = clips.map((c, i) => {
-    const q = QUESTIONS.find((x) => x.id === c?.questionId);
-    if (!q) throw new HttpError(400, "VALIDATION_ERROR", "Unknown questionId.", "clips");
-    const sub = String(c.mime ?? "").split(";")[0].split("/")[1] ?? "";
-    const format = FORMATS[sub];
-    if (!format) throw new HttpError(400, "VALIDATION_ERROR", `Unsupported audio type ${c.mime}.`, "clips");
-    const bytes = Buffer.from(String(c.audioBase64 ?? ""), "base64");
-    if (bytes.length === 0 || bytes.length > MAX_CLIP_BYTES) throw new HttpError(400, "VALIDATION_ERROR", "Each answer must be a short recording.", "clips");
-    return { questionId: q.id as QuestionId, format, bytes, mime: String(c.mime), key: `voice/${sessionId}/${q.id}.${format}`, jobName: `messloop-${sessionId}-${i}` };
-  });
-  await Promise.all(prepared.map(async (c) => {
-    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: c.key, Body: c.bytes, ContentType: c.mime }));
-    await transcribe.send(new StartTranscriptionJobCommand({
-      TranscriptionJobName: c.jobName,
-      LanguageCode: "hi-IN",
-      MediaFormat: c.format as any,
-      Media: { MediaFileUri: `s3://${bucket}/${c.key}` },
-    }));
-  }));
-  const jobs = prepared.map(({ questionId, jobName, key }) => ({ questionId, jobName, key }));
-  await put({ PK: HPK, SK: `VOICE#${sessionId}`, sessionId, status: "transcribing", jobs, createdAt: new Date().toISOString() });
-  return { sessionId };
-}
-
-/** Polled by the app. Once every answer is text, our model extracts the form fields once. */
-export async function getSession(sessionId: string) {
-  const s = await get(HPK, `VOICE#${sessionId}`);
-  if (!s) throw new HttpError(404, "NOT_FOUND", "No such voice log.");
-  if (s.status !== "transcribing") return publicSession(s);
-
-  const transcripts: Record<string, string> = {};
-  for (const j of s.jobs) {
-    const out = await transcribe.send(new GetTranscriptionJobCommand({ TranscriptionJobName: j.jobName }));
-    const job = out.TranscriptionJob;
-    if (job?.TranscriptionJobStatus === "IN_PROGRESS" || job?.TranscriptionJobStatus === "QUEUED") return { sessionId, status: "transcribing" };
-    if (job?.TranscriptionJobStatus === "COMPLETED" && job.Transcript?.TranscriptFileUri) {
-      const data: any = await (await fetch(job.Transcript.TranscriptFileUri)).json();
-      transcripts[j.questionId] = data?.results?.transcripts?.[0]?.transcript ?? "";
-    } else {
-      transcripts[j.questionId] = "";
-    }
-  }
-
-  // Recordings are only needed until they are text.
-  const bucket = process.env.VOICE_BUCKET;
-  await Promise.all(s.jobs.map(async (j: any) => {
-    await transcribe.send(new DeleteTranscriptionJobCommand({ TranscriptionJobName: j.jobName })).catch(() => {});
-    if (bucket) await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: j.key })).catch(() => {});
-  }));
-
-  const items = (await query(HPK, "ITEM#")).map((i: any) => ({ itemId: i.itemId, name: i.name, unit: i.unit }));
-  const extraction = await extract(transcripts, items);
-  const done = { ...s, status: "done", transcripts, fields: extraction.fields, extractionSource: extraction.source, extractionNote: extraction.note };
-  await put(done);
-  return publicSession(done);
-}
-
-function publicSession(s: any) {
-  return { sessionId: s.sessionId, status: s.status, transcripts: s.transcripts ?? {}, fields: s.fields ?? {}, extractionSource: s.extractionSource, extractionNote: s.extractionNote };
 }
 
 interface Fields { itemId: string | null; preparedQty: number | null; leftoverQty: number | null; servings: number | null; reason: string | null }
@@ -163,4 +89,55 @@ async function extract(transcripts: Record<string, string>, items: { itemId: str
   } catch (e: any) {
     return { fields: empty, source: "none", note: e?.name === "AbortError" ? "Our model took too long. Please fill the form from what you said." : "Could not read the answers. Please fill the form." };
   }
+}
+
+// The call sends each answer the moment it ends, while the next question is playing, so
+// by the time the worker hangs up most answers are already text. Streaming transcription
+// takes about as long as the answer itself; batch jobs took 10-15 s each. Answers arrive
+// as 16 kHz mono PCM and are never stored.
+
+const MAX_PCM_BYTES = 16000 * 2 * 25; // 25 s of 16-bit mono audio
+
+export async function transcribeAnswer(body: any) {
+  const q = QUESTIONS.find((x) => x.id === body?.questionId);
+  if (!q) throw new HttpError(400, "VALIDATION_ERROR", "Unknown questionId.", "questionId");
+  const pcm = Buffer.from(String(body?.pcmBase64 ?? ""), "base64");
+  if (pcm.length === 0 || pcm.length > MAX_PCM_BYTES) throw new HttpError(400, "VALIDATION_ERROR", "The answer must be a short recording.", "pcmBase64");
+
+  const started = Date.now();
+  async function* audio() {
+    for (let i = 0; i < pcm.length; i += 8192) yield { AudioEvent: { AudioChunk: pcm.subarray(i, i + 8192) } };
+  }
+  const res = await streaming.send(new StartStreamTranscriptionCommand({
+    LanguageCode: "hi-IN",
+    MediaEncoding: "pcm",
+    MediaSampleRateHertz: 16000,
+    AudioStream: audio(),
+  }));
+  const parts: string[] = [];
+  for await (const ev of res.TranscriptResultStream ?? []) {
+    for (const r of ev.TranscriptEvent?.Transcript?.Results ?? []) {
+      if (!r.IsPartial && r.Alternatives?.[0]?.Transcript) parts.push(r.Alternatives[0].Transcript);
+    }
+  }
+  const text = parts.join(" ").trim();
+  console.log(JSON.stringify({ event: "voice_transcribed", questionId: q.id, ms: Date.now() - started, chars: text.length }));
+  return { questionId: q.id, text };
+}
+
+/** Rules read what they can (usually everything); the model is asked only about the rest. */
+export async function extractAnswers(body: any) {
+  const raw = body?.transcripts && typeof body.transcripts === "object" ? body.transcripts : {};
+  const transcripts: Record<string, string> = {};
+  for (const q of QUESTIONS) if (typeof raw[q.id] === "string") transcripts[q.id] = raw[q.id].slice(0, 500);
+
+  const items = (await query(HPK, "ITEM#")).map((i: any) => ({ itemId: i.itemId, name: i.name }));
+  const { fields, unread } = parseAnswers(transcripts, items);
+  if (unread.length === 0) return { fields, source: "rules" };
+
+  const model = await extract(transcripts, items);
+  const key = { dish: "itemId", prepared: "preparedQty", leftover: "leftoverQty", servings: "servings" } as const;
+  const merged = { ...fields };
+  for (const q of unread) (merged as any)[key[q]] = (model.fields as any)[key[q]];
+  return { fields: merged, source: model.source === "ai" ? "rules+ai" : "rules", note: model.note };
 }

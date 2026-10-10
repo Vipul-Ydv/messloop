@@ -32,20 +32,20 @@ const routes: [string, RegExp, Handler][] = [
     return json(200, await svc.listWasteRecords(req.query));
   }],
 
-  // Voice log: spoken questions, recorded answers, transcripts, extracted fields (never saved here).
+  // Voice call: spoken questions, one answer transcribed at a time, fields read from them (never saved here).
   ["GET", /^\/voice\/prompts$/, async (req) => {
     requireRole(req, ["worker", "manager"]);
     return json(200, await voice.prompts());
   }],
 
-  ["POST", /^\/voice\/sessions$/, async (req) => {
+  ["POST", /^\/voice\/transcribe$/, async (req) => {
     requireRole(req, ["worker", "manager"]);
-    return json(201, await voice.startSession(req.body));
+    return json(200, await voice.transcribeAnswer(req.body));
   }],
 
-  ["GET", /^\/voice\/sessions\/(?<id>[^/]+)$/, async (req) => {
+  ["POST", /^\/voice\/extract$/, async (req) => {
     requireRole(req, ["worker", "manager"]);
-    return json(200, await voice.getSession(req.params.id));
+    return json(200, await voice.extractAnswers(req.body));
   }],
 
   ["GET", /^\/analytics\/summary$/, async (req) => {

@@ -64,7 +64,6 @@ Globals:
         # Built from the fixed name, so the functions and the state machine can refer to
         # each other without a circular reference.
         STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:messloop-agent
-        VOICE_BUCKET: !Ref VoiceBucket
 
 Resources:
   Table:
@@ -81,24 +80,6 @@ Resources:
       # New waste records wake the agent (AgentFunction's MealLogged event).
       StreamSpecification:
         StreamViewType: NEW_IMAGE
-
-  # Voice-log recordings, kept only until they are transcribed (and at most one day).
-  VoiceBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
-      LifecycleConfiguration:
-        Rules:
-          - Id: delete-recordings
-            Status: Enabled
-            ExpirationInDays: 1
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -118,11 +99,9 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
-        - S3CrudPolicy:
-            BucketName: !Ref VoiceBucket
         - Statement:
             - Effect: Allow
-              Action: [polly:SynthesizeSpeech, transcribe:StartTranscriptionJob, transcribe:GetTranscriptionJob, transcribe:DeleteTranscriptionJob]
+              Action: [polly:SynthesizeSpeech, transcribe:StartStreamTranscription]
               Resource: "*"
         - StepFunctionsExecutionPolicy:
             StateMachineName: messloop-agent
