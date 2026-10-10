@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: MessLoop - hostel mess food-waste loop. HTTP API, one Lambda, one DynamoDB table.
+Description: MessLoop - hostel mess food-waste loop. HTTP API, Lambda, DynamoDB, and a Step Functions waste agent.
 
 Parameters:
   AuthSecret:
@@ -31,10 +31,39 @@ Parameters:
   AiModel:
     Type: String
     Default: qwen3-4b
+  DemoMode:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: One-click demo logins for judges. Only for simulated data.
   AllowSeed:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
+
+Globals:
+  Function:
+    Handler: handler.handler
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 512
+    Environment:
+      Variables:
+        TABLE_NAME: messloop
+        HOSTEL_ID: demo-hostel
+        AUTH_SECRET: !Ref AuthSecret
+        ROLE_CODE_STUDENT: !Ref RoleCodeStudent
+        ROLE_CODE_WORKER: !Ref RoleCodeWorker
+        ROLE_CODE_MANAGER: !Ref RoleCodeManager
+        AI_BASE_URL: !Ref AiBaseUrl
+        AI_API_KEY: !Ref AiApiKey
+        AI_MODEL: !Ref AiModel
+        AI_TIMEOUT_MS: "75000"
+        ALLOW_SEED: !Ref AllowSeed
+        DEMO_MODE: !Ref DemoMode
+        # Built from the fixed name, so the functions and the state machine can refer to
+        # each other without a circular reference.
+        STATE_MACHINE_ARN: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:messloop-agent
 
 Resources:
   Table:
@@ -48,6 +77,9 @@ Resources:
       KeySchema:
         - { AttributeName: PK, KeyType: HASH }
         - { AttributeName: SK, KeyType: RANGE }
+      # New waste records wake the agent (AgentFunction's MealLogged event).
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
 
   Api:
     Type: AWS::Serverless::HttpApi
@@ -57,42 +89,22 @@ Resources:
         AllowHeaders: [authorization, content-type]
         AllowMethods: [GET, POST, OPTIONS]
 
+  # The HTTP API. It never calls the model itself: anything slow goes to the agent.
   ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      # Named so the function can invoke itself without a circular reference.
       FunctionName: messloop-api
-      CodeUri: backend/dist
-      Handler: handler.handler
-      Runtime: nodejs22.x
-      Architectures: [arm64]
-      MemorySize: 512
-      # HTTP requests are still cut off at 30 s by API Gateway; the extra time is for
-      # the asynchronous AI explanation, which runs outside any request.
-      Timeout: 90
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref Table
-          HOSTEL_ID: demo-hostel
-          AUTH_SECRET: !Ref AuthSecret
-          ROLE_CODE_STUDENT: !Ref RoleCodeStudent
-          ROLE_CODE_WORKER: !Ref RoleCodeWorker
-          ROLE_CODE_MANAGER: !Ref RoleCodeManager
-          AI_BASE_URL: !Ref AiBaseUrl
-          AI_API_KEY: !Ref AiApiKey
-          AI_MODEL: !Ref AiModel
-          AI_TIMEOUT_MS: "75000"
-          ALLOW_SEED: !Ref AllowSeed
+      CodeUri: backend/dist # per function: `cloudformation package` ignores Globals
+      Timeout: 29
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: messloop-agent
         - Statement:
             - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:messloop-api
-      # Never retry a background explanation: a second run would just repeat the same call.
-      EventInvokeConfig:
-        MaximumRetryAttempts: 0
+              Action: [states:SendTaskSuccess, states:SendTaskFailure]
+              Resource: "*" # task-token calls take no resource ARN
       Events:
         Proxy:
           Type: HttpApi
@@ -101,10 +113,132 @@ Resources:
             Path: /{proxy+}
             Method: ANY
 
+  # The waste agent: started by a logged meal (DynamoDB Streams) or "Run analysis",
+  # and runs each step of the state machine below.
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: messloop-agent
+      CodeUri: backend/dist # per function: `cloudformation package` ignores Globals
+      Timeout: 300 # a tool loop plus one written answer on a CPU-hosted model
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: messloop-agent
+        - Statement:
+            - Effect: Allow
+              Action: [states:SendTaskSuccess, states:SendTaskFailure]
+              Resource: "*"
+      Events:
+        MealLogged:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt Table.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumRetryAttempts: 2
+            # Only newly logged meals, never the seeded demo history.
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName":["INSERT"],"dynamodb":{"NewImage":{"SK":{"S":[{"prefix":"WASTE#"}]},"isSimulated":{"BOOL":[false]}}}}'
+
+  # Investigate → wait for the manager (paused on a task token) → done; or, after a
+  # meal under an active trial, measure the impact and report back.
+  AgentStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: messloop-agent
+      Type: STANDARD
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AgentFunction
+      DefinitionSubstitutions:
+        AgentFunctionArn: !GetAtt AgentFunction.Arn
+      Definition:
+        Comment: MessLoop waste agent. AI recommends, the manager decides, outcomes are measured.
+        StartAt: Route
+        States:
+          Route:
+            Type: Choice
+            Choices:
+              - Variable: $.kind
+                StringEquals: impact
+                Next: MeasureImpact
+            Default: Investigate
+          Investigate:
+            Type: Task
+            Comment: The agent gathers evidence with tools, writes a suggestion, code checks it.
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: ${AgentFunctionArn}
+              Payload:
+                agentStep: investigate
+                SK.$: $.SK
+            ResultSelector:
+              result.$: $.Payload
+            ResultPath: $.investigation
+            TimeoutSeconds: 320
+            Catch:
+              # The template suggestion is already stored, so the manager can still decide.
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.investigationError
+                Next: WaitForManager
+            Next: WaitForManager
+          WaitForManager:
+            Type: Task
+            Comment: Human in the loop. Nothing changes until the manager approves, modifies or rejects.
+            Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: ${AgentFunctionArn}
+              Payload:
+                agentStep: await
+                SK.$: $.SK
+                taskToken.$: $$.Task.Token
+            ResultPath: $.decision
+            TimeoutSeconds: 1209600 # 14 days
+            Catch:
+              - ErrorEquals: [States.Timeout]
+                Next: NoDecision
+            Next: Decided
+          Decided:
+            Type: Choice
+            Choices:
+              - Variable: $.decision.status
+                StringEquals: rejected
+                Next: Rejected
+            Default: TrialStarted
+          Rejected:
+            Type: Succeed
+          TrialStarted:
+            Type: Succeed
+            Comment: From here, each meal logged under the trial starts a MeasureImpact run.
+          NoDecision:
+            Type: Succeed
+          MeasureImpact:
+            Type: Task
+            Comment: Code computes the before/after numbers; the agent writes a short, checked report.
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              FunctionName: ${AgentFunctionArn}
+              Payload:
+                agentStep: impact
+                interventionId.$: $.interventionId
+            ResultSelector:
+              result.$: $.Payload
+            TimeoutSeconds: 120
+            End: true
+
   ApiLogs:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${ApiFunction}
+      LogGroupName: /aws/lambda/messloop-api
+      RetentionInDays: 7
+
+  AgentLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/messloop-agent
       RetentionInDays: 7
 
 Outputs:
@@ -112,3 +246,5 @@ Outputs:
     Value: !Sub https://${Api}.execute-api.${AWS::Region}.amazonaws.com
   TableName:
     Value: !Ref Table
+  AgentStateMachine:
+    Value: !Ref AgentStateMachine

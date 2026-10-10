@@ -23,15 +23,30 @@ function safeEqual(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
+function issue(role: Role) {
+  const exp = Date.now() + TTL_MS;
+  const payload = b64(JSON.stringify({ role, exp }));
+  return { token: `${payload}.${sign(payload)}`, role, expiresAt: new Date(exp).toISOString() };
+}
+
+/**
+ * One-click demo login for judges (DEMO_MODE=true). Safe only because every record in
+ * the demo is simulated and a manager can reset it; turn it off for real hostel data.
+ */
+export function demoLogin(body: unknown): { token: string; role: Role; expiresAt: string } {
+  if (process.env.DEMO_MODE !== "true") throw new HttpError(403, "FORBIDDEN", "Demo login is turned off.");
+  const role = (body as { role?: string } | null)?.role;
+  if (!role || !ROLES.includes(role as Role)) throw new HttpError(400, "VALIDATION_ERROR", "role must be student, worker or manager.", "role");
+  return issue(role as Role);
+}
+
 export function login(body: unknown): { token: string; role: Role; expiresAt: string } {
   const b = (body ?? {}) as { role?: string; code?: string };
   if (!b.role || !ROLES.includes(b.role as Role)) throw new HttpError(400, "VALIDATION_ERROR", "role must be student, worker or manager.", "role");
   if (typeof b.code !== "string" || !b.code) throw new HttpError(400, "VALIDATION_ERROR", "code is required.", "code");
   const expected = process.env[`ROLE_CODE_${b.role.toUpperCase()}`];
   if (!expected || !safeEqual(b.code, expected)) throw new HttpError(401, "UNAUTHENTICATED", "Wrong code for this role.");
-  const exp = Date.now() + TTL_MS;
-  const payload = b64(JSON.stringify({ role: b.role, exp }));
-  return { token: `${payload}.${sign(payload)}`, role: b.role as Role, expiresAt: new Date(exp).toISOString() };
+  return issue(b.role as Role);
 }
 
 export function authenticate(req: Req): Role {

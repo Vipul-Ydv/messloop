@@ -21,4 +21,11 @@ One line each, as the brief asks (§0.1.5).
 - **Live preview uses `packages/core`:** the entry form imports `wastePct`/`wastePer100` directly, so the preview and the stored value come from the same code.
 - **Student view:** students can read trials and their impact (`GET /interventions`, `/impact`); everything else stays manager-only.
 - **CORS preflight:** the catch-all route also receives `OPTIONS`; the Lambda answers 204 and API Gateway adds the CORS headers.
+- **The waste agent (after DTU judges asked for agentic AI and more AWS):** logging a meal starts it through DynamoDB Streams (filtered to new, non-seeded waste records). An AWS Step Functions state machine (`messloop-agent`) runs Investigate → WaitForManager → done, or MeasureImpact for meals logged under a trial.
+- **Agent tools:** our model picks which evidence to look at (`get_waste_history`, `get_student_feedback`, `get_replacement_options`); each tool returns a slice of the evidence package code already computed. The validator only accepts numbers from the slices the agent actually looked at.
+- **Human in the loop is a real pause:** WaitForManager uses a Step Functions task token. Only the manager's decision resumes the run; recordDecision is still the only code that changes status (R1).
+- **Separate agent Lambda (`messloop-agent`, 300 s):** the HTTP API never calls the model, so it stays well inside API Gateway's 30 s.
+- **Field-level writes:** the pause token and the decision are written with DynamoDB update expressions (decision-side conditional on `pending`), so the two can't overwrite each other.
+- **Outcome report:** after a trial meal the agent writes one sentence about what changed (numbers checked, must say "per 100 plates"); code always appends the observed-change caveat, so the model can't drop it.
+- **Demo mode:** one-click demo logins (`POST /auth/demo`, `DemoMode` parameter, on by default) because a judge without a role code got stuck at DTU. Safe only because all demo data is simulated and a manager can reset it; turn it off for real data.
 - **Scope cut for time:** no Analytics page and no P1 features; Dashboard carries the core charts.

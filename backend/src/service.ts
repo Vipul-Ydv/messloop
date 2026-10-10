@@ -11,14 +11,15 @@ import { buildEvidence } from "../../packages/core/evidence.ts";
 import { validateWasteInput } from "../../packages/core/validate.ts";
 import { buildFallback } from "../../packages/core/fallback.ts";
 import type { EvidencePackage, FoodItem, InterventionAction, RatingAggregate } from "../../packages/core/types.ts";
-import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
+import { SFNClient, SendTaskSuccessCommand, StartExecutionCommand } from "@aws-sdk/client-sfn";
 import * as seedData from "../../packages/core/seed-data.ts";
-import { HPK, deleteAllUnder, get, put, putMany, putNew, query } from "./db.ts";
+import { HPK, deleteAllUnder, get, put, putMany, putNew, query, setFields } from "./db.ts";
 import { HttpError } from "./http.ts";
-import { explain, type Explanation } from "./ai.ts";
+import type { Explanation } from "./ai.ts";
+import { investigate, writeOutcome, type ImpactFacts } from "./agent.ts";
 import type { Role } from "./auth.ts";
 
-const lambda = new LambdaClient({});
+const sfn = new SFNClient({});
 
 const today = () => new Date().toISOString().slice(0, 10);
 const now = () => new Date().toISOString();
@@ -150,7 +151,15 @@ export async function summary() {
 
 // ---------------------------------------------------------------- recommendations
 
-export async function generateRecommendations() {
+type Trigger = "manual" | "meal_logged";
+
+/**
+ * Applies the recurring-waste rule and, for each dish it flags, stores a pending
+ * recommendation and hands it to the agent workflow. `only` limits it to one dish
+ * (used when a logged meal triggers the agent).
+ */
+export async function generateRecommendations(opts: { only?: { slotId: string; itemId: string }; trigger?: Trigger } = {}) {
+  const trigger = opts.trigger ?? "manual";
   const d = await loadAll();
   const threshold = d.meta.threshold ?? DEFAULT_THRESHOLD;
   const itemById = new Map(d.items.map((i) => [i.itemId, i]));
@@ -165,6 +174,7 @@ export async function generateRecommendations() {
 
   for (const [k, recs] of groups) {
     const [slotId, itemId] = k.split("|");
+    if (opts.only && (opts.only.slotId !== slotId || opts.only.itemId !== itemId)) continue;
     const item = itemById.get(itemId);
     if (!item) continue;
     // Post-intervention records describe a change already made; they are not new history.
@@ -202,9 +212,9 @@ export async function generateRecommendations() {
     }
 
     // Stored straight away with the deterministic template, so there is always something
-    // correct to show. Our model's wording replaces it in the background (explainLater):
+    // correct to show. The agent workflow then investigates and replaces the wording:
     // a CPU-hosted model takes longer than API Gateway's 30-second limit allows.
-    const aiConfigured = Boolean(process.env.AI_BASE_URL);
+    const agentConfigured = Boolean(process.env.STATE_MACHINE_ARN);
     const createdAt = now();
     const rec = {
       PK: HPK,
@@ -213,15 +223,16 @@ export async function generateRecommendations() {
       targetItemId: itemId,
       slotId,
       evidence,
-      ...contentFields(evidence, { content: buildFallback(evidence), source: "fallback_template", fallbackReason: aiConfigured ? undefined : "AI_BASE_URL not configured", ms: 0 }),
-      aiStatus: aiConfigured ? "running" : "done",
+      ...contentFields(evidence, { content: buildFallback(evidence), source: "fallback_template", fallbackReason: agentConfigured ? undefined : "agent workflow not configured", ms: 0 }),
+      aiStatus: agentConfigured ? "running" : "done",
+      agent: { trigger, trace: [] as unknown[] },
       evidenceStrength: evidence.evidenceStrength,
       status: "pending",
       createdAt,
       isSimulated: history.some((r) => r.isSimulated),
     };
     await put(rec);
-    if (aiConfigured) await startExplanation(rec.SK);
+    if (agentConfigured) await startAgent({ kind: "recommend", SK: rec.SK }, `rec-${rec.recId}`, rec.SK);
     results.push(strip(rec));
   }
   return results;
@@ -249,38 +260,110 @@ function contentFields(evidence: EvidencePackage, ai: Explanation) {
   };
 }
 
-/** Asks this same function, asynchronously, to write the AI explanation for one recommendation. */
-async function startExplanation(SK: string) {
+// ---------------------------------------------------------------- agent workflow
+// Step Functions runs: Investigate → WaitForManager (paused on a task token) → done,
+// or MeasureImpact after a meal is logged under an active trial. These functions are
+// its steps. None of them changes a recommendation's status: only recordDecision does (R1).
+
+/** Starts one agent run. If it cannot start, the template already stored stands. */
+async function startAgent(input: Record<string, unknown>, name: string, recSK?: string) {
   try {
-    await lambda.send(new InvokeCommand({
-      FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
-      InvocationType: "Event",
-      Payload: Buffer.from(JSON.stringify({ kind: "explain", SK })),
-    }));
+    const out = await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.STATE_MACHINE_ARN, name, input: JSON.stringify(input) }));
+    console.log(JSON.stringify({ event: "agent_started", kind: input.kind, executionArn: out.executionArn }));
+    if (recSK) await setFields(HPK, recSK, { agentExecutionArn: out.executionArn });
   } catch (e: any) {
-    // The template is already stored, so the manager can still act; just stop waiting.
-    console.error(JSON.stringify({ event: "explain_invoke_failed", message: e?.message }));
-    const rec = await get(HPK, SK);
-    if (rec) await put({ ...rec, aiStatus: "done", fallbackReason: "background AI call could not start" });
+    if (e?.name === "ExecutionAlreadyExists") return; // the same event delivered twice
+    console.error(JSON.stringify({ event: "agent_start_failed", message: e?.message }));
+    if (recSK) await setFields(HPK, recSK, { aiStatus: "done", fallbackReason: "agent workflow could not start" }, "pending");
   }
 }
 
-/** Background half of generateRecommendations. Never touches status: that stays with recordDecision (R1). */
-export async function explainLater(SK: string) {
+/** Step 1: the agent gathers evidence with tools and writes the suggestion. */
+export async function agentInvestigate(SK: string) {
   const rec = await get(HPK, SK);
-  if (!rec || rec.aiStatus !== "running") return;
-  const ai = await explain(rec.evidence);
-  const latest = await get(HPK, SK); // the manager may not decide while running, but re-read anyway
-  if (!latest || latest.status !== "pending") return;
-  await put({ ...latest, ...contentFields(latest.evidence, ai), aiStatus: "done" });
+  if (!rec || rec.aiStatus !== "running") return { skipped: true };
+  const inv = await investigate(rec.evidence);
+  const saved = await setFields(HPK, SK, {
+    ...contentFields(rec.evidence, inv.explanation),
+    aiStatus: "done",
+    agent: { ...(rec.agent ?? {}), trace: inv.trace, toolsUsed: inv.toolsUsed },
+  }, "pending");
+  return saved ? { source: inv.explanation.source, toolsUsed: inv.toolsUsed } : { skipped: true };
+}
+
+/** Step 2: the run pauses here until the manager decides. */
+export async function agentAwaitDecision(SK: string, taskToken: string) {
+  const rec = await get(HPK, SK);
+  if (!rec) return resumeAgent(taskToken, { status: "missing" });
+  const stored = await setFields(HPK, SK, { agentTaskToken: taskToken, agentWaitingSince: now() }, "pending");
+  if (!stored) {
+    // Decided before the run reached this step: carry the decision straight on.
+    const decided = await get(HPK, SK);
+    return resumeAgent(taskToken, { status: decided?.status ?? "missing", interventionId: decided?.interventionId ?? null });
+  }
+}
+
+async function resumeIfWaiting(SK: string, output: Record<string, unknown>) {
+  const latest = await get(HPK, SK);
+  if (latest?.agentTaskToken) await resumeAgent(latest.agentTaskToken, output);
+}
+
+async function resumeAgent(taskToken: string, output: Record<string, unknown>) {
+  try {
+    await sfn.send(new SendTaskSuccessCommand({ taskToken, output: JSON.stringify(output) }));
+  } catch (e: any) {
+    // A run that already timed out or was stopped: the decision itself still stands.
+    console.error(JSON.stringify({ event: "agent_resume_failed", name: e?.name }));
+  }
+}
+
+/** Step 3 (after a trial meal): measure, then let the agent report back in words. */
+export async function agentMeasureImpact(interventionId: string) {
+  const impact = await computeImpact(interventionId);
+  if (!impact.postRecordCount) return { skipped: true };
+  const intervention = (await query(HPK, "INT#")).find((i) => i.interventionId === interventionId);
+  const items = await listItems();
+  const name = (id?: string) => items.find((i: any) => i.itemId === id)?.name ?? id ?? "";
+  const facts: ImpactFacts = {
+    dishBefore: name(intervention?.action.fromItemId),
+    dishAfter: name(intervention?.action.toItemId ?? intervention?.action.fromItemId),
+    baselineWastePer100: impact.baselineWastePer100,
+    postWastePer100: impact.postWastePer100!,
+    absoluteChange: impact.absoluteChange!,
+    reductionPct: impact.reductionPct ?? null,
+    direction: impact.direction!,
+    postRecordCount: impact.postRecordCount,
+    baselineRecordCount: impact.baselineRecordCount!,
+    estimatedFoodSavedQty: impact.estimatedFoodSavedQty!,
+    unit: impact.unit!,
+  };
+  const summary = await writeOutcome(facts);
+  const stored = await get(HPK, `IMPACT#${interventionId}`);
+  if (stored) await put({ ...stored, agentSummary: { ...summary, forPostRecordCount: impact.postRecordCount, at: now() } });
+  return { source: summary.source };
+}
+
+/** DynamoDB Streams: a newly logged (not seeded) meal wakes the agent. */
+export async function onMealLogged(record: { slotId: string; itemId: string; recordId: string; interventionId?: string }) {
+  if (record.interventionId) {
+    await startAgent({ kind: "impact", interventionId: record.interventionId }, `impact-${record.recordId}`);
+    return;
+  }
+  await generateRecommendations({ only: { slotId: record.slotId, itemId: record.itemId }, trigger: "meal_logged" });
 }
 
 /** A background run that never reported back should not block the manager forever. */
-const AI_STALE_MS = 120_000;
+const AI_STALE_MS = 180_000;
 const aiStillRunning = (rec: any) => rec.aiStatus === "running" && Date.now() - Date.parse(rec.createdAt) < AI_STALE_MS;
 
+/** A recommendation as the API shows it: without the agent's internal task token. */
+function publicRec(r: any) {
+  const { agentTaskToken, ...rest } = r;
+  return rest;
+}
+
 export async function listRecommendations(status?: string) {
-  const recs = (await query(HPK, "REC#")).map(strip).map((r) =>
+  const recs = (await query(HPK, "REC#")).map(strip).map(publicRec).map((r) =>
     r.aiStatus === "running" && !aiStillRunning(r) ? { ...r, aiStatus: "done", fallbackReason: "background AI call did not finish" } : r,
   );
   return recs.filter((r) => !status || r.status === status).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -316,8 +399,9 @@ export async function recordDecision(recId: string, body: any, role: Role) {
 
   if (decision === "reject") {
     const updated = { ...rec, ...decided, status: "rejected" };
-    await put(updated);
-    return { recommendation: strip(updated), intervention: null };
+    await setFields(HPK, rec.SK, { ...decided, status: "rejected" });
+    await resumeIfWaiting(rec.SK, { status: "rejected", interventionId: null });
+    return { recommendation: publicRec(strip(updated)), intervention: null };
   }
 
   const action: InterventionAction | null = decision === "modify" ? validateAction(body.modifiedAction, rec) : rec.suggestedAction;
@@ -361,8 +445,9 @@ export async function recordDecision(recId: string, body: any, role: Role) {
   };
   await putNew(intervention, "An intervention for this dish already starts on that date.");
   const updated = { ...rec, ...decided, status: decision === "modify" ? "modified" : "approved", modifiedAction: decision === "modify" ? action : undefined, interventionId };
-  await put(updated);
-  return { recommendation: strip(updated), intervention: strip(intervention) };
+  await setFields(HPK, rec.SK, { ...decided, status: updated.status, modifiedAction: updated.modifiedAction, interventionId });
+  await resumeIfWaiting(rec.SK, { status: updated.status, interventionId });
+  return { recommendation: publicRec(strip(updated)), intervention: strip(intervention) };
 }
 
 // ---------------------------------------------------------------- interventions & impact
@@ -399,9 +484,12 @@ export async function computeImpact(interventionId: string) {
     computedAt: now(),
     isSimulated: intervention.isSimulated || post.some((r) => r.isSimulated),
   };
-  await put(impact);
+  const previous = await get(HPK, impact.SK);
+  const agentSummary = previous?.agentSummary?.forPostRecordCount === post.length ? previous.agentSummary : undefined;
+  await put({ ...impact, agentSummary });
   return {
     ...strip(impact),
+    agentSummary,
     labels: {
       baselineWastePer100: "Calculated", postWastePer100: "Calculated", absoluteChange: "Calculated",
       reductionPct: "Calculated", estimatedFoodSavedQty: "Estimated",

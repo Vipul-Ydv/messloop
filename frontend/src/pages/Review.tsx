@@ -114,13 +114,15 @@ export default function Review({ recId }: { recId: string }) {
         </div>
 
         <div className="stack" style={{ gap: 16 }}>
+          <AgentTrail rec={rec} />
+
           <Card delay={40} aria-live="polite" aria-busy={rec.aiStatus === "running"}>
             <div className="row between">
               <h2>Suggestion</h2>
               <SourceTag rec={rec} />
             </div>
             {rec.aiStatus === "running" && (
-              <p className="note note-info row running"><span className="spinner" aria-hidden="true" /> Our AI is writing an explanation from this evidence. Showing the rule-based version until it is checked.</p>
+              <p className="note note-info row running"><span className="spinner" aria-hidden="true" /> The agent is investigating. Showing the rule-based version until its answer is checked.</p>
             )}
             <p style={{ fontSize: 18 }}><strong>{suggestionText(rec)}</strong></p>
             <p>{c.problem}</p>
@@ -155,8 +157,47 @@ export default function Review({ recId }: { recId: string }) {
   );
 }
 
+const TOOL_LABEL: Record<string, string> = {
+  get_waste_history: "Looked at the dish's waste history",
+  get_student_feedback: "Looked at student ratings and reasons",
+  get_replacement_options: "Compared dishes that could replace it",
+};
+
+/** What the agent did, step by step. Runs on Step Functions; every step is also in its console. */
+function AgentTrail({ rec }: { rec: Recommendation }) {
+  const steps = rec.agent?.trace ?? [];
+  const running = rec.aiStatus === "running";
+  const decided = rec.status !== "pending";
+  const Row = ({ icon, text, sub, live = false }: { icon: string; text: string; sub?: string; live?: boolean }) => (
+    <li className={live ? "running" : undefined} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 10, alignItems: "start" }}>
+      <span aria-hidden="true" style={{ width: 28, height: 28, borderRadius: "50%", display: "grid", placeItems: "center", background: "var(--brand-soft)", color: "var(--brand)", fontSize: 14, fontWeight: 700 }}>{icon}</span>
+      <span><span>{text}</span>{sub && <><br /><span className="small muted">{sub}</span></>}</span>
+    </li>
+  );
+  return (
+    <Card delay={20}>
+      <div className="row between">
+        <h2>Agent activity</h2>
+        <span className="small muted">AWS Step Functions</span>
+      </div>
+      <ol className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 12 }}>
+        <Row icon="⚡" text={rec.agent?.trigger === "meal_logged" ? "Woke up when a meal was logged" : "Started by Run analysis"} sub={`A fixed rule flagged ${rec.evidence.targetItem.name}, not the AI`} />
+        {steps.filter((s) => s.step === "tool").map((s, i) => (
+          <Row key={i} icon="🔍" text={TOOL_LABEL[s.name ?? ""] ?? s.name ?? "Used a tool"} sub="Our model chose this step itself" />
+        ))}
+        {steps.filter((s) => s.step === "note").map((s, i) => <Row key={"n" + i} icon="!" text={s.detail ?? "Note"} />)}
+        {running && <Row icon="…" text="Investigating with our own model (Qwen3-4B on EC2)" sub="Usually under a minute" live />}
+        {steps.filter((s) => s.step === "write").map((s, i) => (
+          <Row key={"w" + i} icon={rec.source === "ai" ? "✓" : "↺"} text={rec.source === "ai" ? "Wrote the suggestion · every number checked by code" : "Its answer failed a check, so the rule-based template is shown"} sub={rec.source === "ai" ? undefined : rec.fallbackReason} />
+        ))}
+        {!running && <Row icon={decided ? "✓" : "⏸"} text={decided ? `You decided: ${rec.status}. The run resumed and finished.` : "Paused — waiting for your decision"} sub={decided ? undefined : "Nothing changes until you approve, modify or reject"} live={!decided} />}
+      </ol>
+    </Card>
+  );
+}
+
 function SourceTag({ rec }: { rec: Recommendation }) {
-  if (rec.aiStatus === "running") return <span className="status status-pending">Template · AI writing…</span>;
+  if (rec.aiStatus === "running") return <span className="status status-pending">Template · agent working…</span>;
   if (rec.source === "ai") {
     return (
       <span className="status status-approved" title={`Model ${rec.model ?? ""}, ${rec.aiMs ? Math.round(rec.aiMs / 1000) + " s" : ""}. Every number was checked against the evidence.`}>

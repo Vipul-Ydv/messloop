@@ -28,6 +28,17 @@ template, so a wrong AI answer never reaches the manager. The model call runs in
 background, so `POST /recommendations/generate` returns at once; poll
 `GET /recommendations` until `aiStatus` is `done`.
 
+## The agent
+
+Logging a meal wakes the waste agent (DynamoDB Streams → Lambda → AWS Step Functions):
+
+1. A fixed rule checks the dish. Only a dish over 35% waste in 3 of its last 5 meals goes further.
+2. **Investigate:** our own model (Qwen3-4B on EC2) decides which evidence to look at, using tools, then writes a suggestion. Code checks every number.
+3. **WaitForManager:** the run pauses on a task token. Nothing changes until the manager approves, modifies or rejects.
+4. **MeasureImpact:** each meal logged under the trial measures the before/after numbers and the agent writes a short report.
+
+Judges can click "Try the demo" on the login page; all demo data is simulated.
+
 ## Deploy
 
 ```

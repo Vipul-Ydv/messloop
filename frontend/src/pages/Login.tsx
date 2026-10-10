@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, type Role, type Session } from "../api.ts";
 import { ErrorNote } from "../ui.tsx";
 
@@ -13,6 +13,24 @@ export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+
+  const [demoMode, setDemoMode] = useState(false);
+  useEffect(() => {
+    api<{ demoMode: boolean }>("GET", "/auth/config").then((c) => setDemoMode(c.demoMode)).catch(() => setDemoMode(false));
+  }, []);
+
+  async function tryDemo(r: Role) {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await api<{ token: string; role: Role; expiresAt: string }>("POST", "/auth/demo", { role: r });
+      onLogin({ token: out.token, role: out.role, expiresAt: Date.parse(out.expiresAt) });
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -37,8 +55,21 @@ export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
           <p className="muted">Measure leftovers, spot dishes that keep coming back, try a change, see if it worked.</p>
         </div>
 
+        {demoMode && (
+          <div className="stack" style={{ gap: 10, padding: 16, borderRadius: 12, background: "var(--warn-soft)" }}>
+            <p><strong>Judges and visitors:</strong> try the demo — no code needed. All demo data is simulated.</p>
+            <div className="seg" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))" }}>
+              {ROLES.map((r) => (
+                <button key={r.role} type="button" className="btn" style={{ minHeight: 48 }} disabled={busy} onClick={() => tryDemo(r.role)}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend>I am</legend>
+          <legend>{demoMode ? "Or log in with your code — I am" : "I am"}</legend>
           <div className="stack" style={{ gap: 8, marginTop: 6 }}>
             {ROLES.map((r) => (
               <label key={r.role} className="seg" style={{ display: "block" }}>
@@ -60,6 +91,7 @@ export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
 
         <ErrorNote error={error} />
         <button className="btn" type="submit" disabled={busy || !code}>{busy ? "Checking…" : "Log in"}</button>
+
       </form>
     </div>
   );

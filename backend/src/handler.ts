@@ -1,8 +1,9 @@
 // Lambda entry point: one function, a small internal route table (§5.2).
 
-import { login, requireRole } from "./auth.ts";
+import { demoLogin, login, requireRole } from "./auth.ts";
 import { HttpError, errorResponse, json, toReq, type Req, type Res } from "./http.ts";
 import * as svc from "./service.ts";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 type Handler = (req: Req) => Promise<Res>;
 
@@ -10,6 +11,10 @@ const routes: [string, RegExp, Handler][] = [
   ["GET", /^\/health$/, async () => json(200, { ok: true })],
 
   ["POST", /^\/auth\/login$/, async (req) => json(200, login(req.body))],
+
+  ["POST", /^\/auth\/demo$/, async (req) => json(200, demoLogin(req.body))],
+
+  ["GET", /^\/auth\/config$/, async () => json(200, { demoMode: process.env.DEMO_MODE === "true" })],
 
   ["GET", /^\/items$/, async (req) => {
     requireRole(req, ["student", "worker", "manager"]);
@@ -63,8 +68,9 @@ const routes: [string, RegExp, Handler][] = [
 ];
 
 export async function handler(event: any): Promise<Res | void> {
-  // Our own asynchronous self-invocation (service.startExplanation), not an HTTP request.
-  if (event?.kind === "explain" && typeof event.SK === "string") return svc.explainLater(event.SK);
+  // Not HTTP: a step of the agent workflow (Step Functions) or a batch of new meals (DynamoDB Streams).
+  if (event?.agentStep) return agentStep(event);
+  if (Array.isArray(event?.Records) && event.Records[0]?.eventSource === "aws:dynamodb") return mealsLogged(event.Records);
   try {
     const req = toReq(event);
     // The catch-all route also receives browser CORS preflights; API Gateway adds the
@@ -82,5 +88,26 @@ export async function handler(event: any): Promise<Res | void> {
     if (e instanceof HttpError) return errorResponse(e);
     console.error(JSON.stringify({ event: "unhandled", name: e?.name, message: e?.message }));
     return errorResponse(new HttpError(500, "INTERNAL", "Something went wrong."));
+  }
+}
+
+async function agentStep(event: any) {
+  if (event.agentStep === "investigate") return svc.agentInvestigate(event.SK);
+  if (event.agentStep === "await") return svc.agentAwaitDecision(event.SK, event.taskToken);
+  if (event.agentStep === "impact") return svc.agentMeasureImpact(event.interventionId);
+  throw new Error(`unknown agent step ${event.agentStep}`);
+}
+
+/** The stream's filter already keeps only newly logged (not seeded) waste records. */
+async function mealsLogged(records: any[]) {
+  for (const r of records) {
+    const img = r.dynamodb?.NewImage;
+    if (!img) continue;
+    const rec = unmarshall(img) as any;
+    try {
+      await svc.onMealLogged(rec);
+    } catch (e: any) {
+      console.error(JSON.stringify({ event: "meal_trigger_failed", message: e?.message }));
+    }
   }
 }

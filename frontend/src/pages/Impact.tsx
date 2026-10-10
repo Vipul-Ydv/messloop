@@ -91,6 +91,7 @@ export default function ImpactPage({ interventionId, role }: { interventionId?: 
                     <span className="small muted">Observed change</span>
                   </div>
                 </div>
+                <AgentReport imp={imp} />
                 <p className="note note-warn"><strong>Observed change</strong> — {imp.caveat}</p>
               </>
             )}
@@ -98,6 +99,34 @@ export default function ImpactPage({ interventionId, role }: { interventionId?: 
         );
       })}
     </>
+  );
+}
+
+function AgentReport({ imp }: { imp: Impact }) {
+  const [report, setReport] = useState(imp.agentSummary);
+  useEffect(() => {
+    // The agent writes its report a few seconds after the meal is logged; check back for up to a minute.
+    if (report?.forPostRecordCount === imp.postRecordCount) return;
+    let tries = 0;
+    const t = setInterval(async () => {
+      tries++;
+      try {
+        const fresh = await api<Impact>("GET", `/interventions/${imp.interventionId}/impact`);
+        if (fresh.agentSummary) { setReport(fresh.agentSummary); clearInterval(t); }
+      } catch { /* keep the page as it is */ }
+      if (tries >= 20) clearInterval(t);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [imp.interventionId, imp.postRecordCount, report]);
+
+  return (
+    <div className="stack" style={{ gap: 6, padding: 16, borderRadius: 12, background: "var(--brand-soft)" }}>
+      <div className="row between">
+        <strong>Agent's report</strong>
+        {report && <span className="small muted">{report.source === "ai" ? "Our AI · numbers checked" : "Template · AI answer failed a check"}</span>}
+      </div>
+      {report ? <p>{report.text}</p> : <p className="muted row running"><span className="spinner" aria-hidden="true" /> The agent is writing its report…</p>}
+    </div>
   );
 }
 

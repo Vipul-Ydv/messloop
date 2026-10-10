@@ -142,6 +142,9 @@ export interface Recommendation {
   model?: string;
   aiMs?: number;
   aiStatus: "running" | "done";
+  agent?: { trigger: "manual" | "meal_logged"; trace: AgentStep[]; toolsUsed?: string[] };
+  agentExecutionArn?: string;
+  agentWaitingSince?: string;
   evidenceStrength: Evidence["evidenceStrength"];
   suggestedAction: Action | null;
   status: "pending" | "approved" | "rejected" | "modified";
@@ -163,6 +166,8 @@ export interface Intervention {
   isSimulated: boolean;
 }
 
+export interface AgentStep { step: "tool" | "write" | "note"; name?: string; ms: number; detail?: string }
+
 export interface Impact {
   interventionId: string;
   baselineWastePer100: number;
@@ -178,4 +183,5 @@ export interface Impact {
   caveat?: string;
   message?: string;
   isSimulated?: boolean;
+  agentSummary?: { text: string; source: "ai" | "fallback_template"; reason?: string; forPostRecordCount: number };
 }

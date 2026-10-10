@@ -2,7 +2,7 @@
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand,
+  BatchWriteCommand, DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { HttpError } from "./http.ts";
 
@@ -31,6 +31,40 @@ export async function putNew<T extends Record<string, unknown>>(item: T, conflic
     return item;
   } catch (e: any) {
     if (e?.name === "ConditionalCheckFailedException") throw new HttpError(409, "CONFLICT", conflictMessage);
+    throw e;
+  }
+}
+
+/**
+ * Sets top-level fields without rewriting the rest of the item, so two writers touching
+ * different fields cannot erase each other. With `onlyIfStatus`, it only applies while
+ * the item's status is that value; returns false when that condition fails.
+ */
+export async function setFields(PK: string, SK: string, fields: Record<string, unknown>, onlyIfStatus?: string): Promise<boolean> {
+  const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
+  const names: Record<string, string> = {};
+  const values: Record<string, unknown> = {};
+  const sets = entries.map(([k, v], i) => {
+    names[`#f${i}`] = k;
+    values[`:v${i}`] = v;
+    return `#f${i} = :v${i}`;
+  });
+  if (onlyIfStatus) {
+    names["#status"] = "status";
+    values[":status"] = onlyIfStatus;
+  }
+  try {
+    await doc.send(new UpdateCommand({
+      TableName: TABLE(),
+      Key: { PK, SK },
+      UpdateExpression: `SET ${sets.join(", ")}`,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+      ConditionExpression: onlyIfStatus ? "attribute_exists(PK) AND #status = :status" : "attribute_exists(PK)",
+    }));
+    return true;
+  } catch (e: any) {
+    if (e?.name === "ConditionalCheckFailedException") return false;
     throw e;
   }
 }

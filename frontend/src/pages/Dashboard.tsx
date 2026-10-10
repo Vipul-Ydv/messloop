@@ -23,6 +23,12 @@ export default function Dashboard() {
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+  // While the agent is working (or a just-logged meal may wake it), refresh quietly.
+  useEffect(() => {
+    if (!recs.some((r) => r.aiStatus === "running")) return;
+    const t = setTimeout(load, 4000);
+    return () => clearTimeout(t);
+  }, [recs, load]);
 
   async function runAnalysis() {
     setRunning(true);
@@ -47,6 +53,20 @@ export default function Dashboard() {
     }
   }
 
+  async function resetDemo() {
+    if (!window.confirm("Reset the demo? All logged meals, suggestions and trials go back to the starting simulated data.")) return;
+    setRunning(true);
+    try {
+      await api("POST", "/admin/seed?includeLatest=false");
+      setRunNote("Demo reset. Log Aloo Gobi for 8 Oct (50 kg cooked, 23 kg left, 115 plates) to start the story.");
+      await load();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setRunning(false);
+    }
+  }
+
   if (error) return <ErrorNote error={error} />;
   if (!data) return <Loading what="Loading dashboard" />;
 
@@ -62,6 +82,7 @@ export default function Dashboard() {
         </div>
         <div className="row">
           <SimBadge show={data.isSimulated} />
+          {data.isSimulated && <button className="btn btn-ghost" onClick={resetDemo} disabled={running}>Reset demo</button>}
           <button className="btn" onClick={runAnalysis} disabled={running}>
             {running ? <><span className="spinner" aria-hidden="true" /> Checking rules…</> : "Run analysis"}
           </button>
@@ -111,7 +132,7 @@ export default function Dashboard() {
               <div className="row between">
                 <p>
                   Evidence strength: <strong>{rec.evidenceStrength}</strong> · Suggested
-                  {rec.aiStatus === "running" ? " (template, AI writing…)" : rec.source === "ai" ? " (our AI)" : " (template)"}:{" "}
+                  {rec.aiStatus === "running" ? " (agent investigating…)" : rec.source === "ai" ? " (our AI agent)" : " (template)"}:{" "}
                   <strong>{describe(rec)}</strong>
                 </p>
                 <a className="btn btn-ghost" href={`#/review/${rec.recId}`}>{rec.status === "pending" ? "Review ▸" : "Open ▸"}</a>
