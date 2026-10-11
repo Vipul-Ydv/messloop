@@ -284,3 +284,17 @@ tr.hot td { background: var(--bad-soft); }
 /* chart legend keys stay a fixed size and labels don't wrap */
 .chart-legend li { white-space: nowrap; }
 .chart-legend li svg { flex: none; width: 22px; height: 14px; }
+
+/* Phones: the pill header can't hold the brand and the whole menu on one line. Brand on
+   top, the menu as one row under it that scrolls sideways if needed, and corners that
+   stay rounded instead of ballooning into a blob. The role colour already says who you are. */
+@media (max-width: 640px) {
+  .topbar { border-radius: 24px; padding: 10px 12px; gap: 8px; }
+  .topbar .brand { flex: 1 1 100%; }
+  .wordmark { font-size: 21px; }
+  .nav { flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; gap: 4px; scrollbar-width: none; margin: 0 -4px; padding: 0 4px; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a, .nav button { min-height: 40px; padding: 0 12px; font-size: 15px; white-space: nowrap; flex: none; }
+  .nav .role-chip { display: none; }
+  .nav button { margin-left: auto; }
+}
