@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api.ts";
 
 interface Question { id: string; text: string; english: string; audio: string }
-export interface VoiceFields { itemId: string | null; preparedQty: number | null; leftoverQty: number | null; servings: number | null; reason: string | null }
+export interface VoiceFields { itemId: string | null; dishes?: string[]; preparedQty: number | null; leftoverQty: number | null; servings: number | null; reason: string | null }
 export interface VoiceResult { fields: VoiceFields; transcripts: Record<string, string>; note?: string }
 
 type Phase = "connecting" | "asking" | "listening" | "reading" | "error";
@@ -52,7 +52,9 @@ export function unlockAudio(): { audio: HTMLAudioElement; ac: AudioContext } {
   return { audio, ac };
 }
 
-export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTMLAudioElement; ac: AudioContext; onResult: (r: VoiceResult) => void; onCancel: () => void }) {
+export default function VoiceLog({ audio, ac, hindi = false, onResult, onCancel }: { audio: HTMLAudioElement; ac: AudioContext; hindi?: boolean; onResult: (r: VoiceResult) => void; onCancel: () => void }) {
+  // Mess staff see the call screen in Hindi.
+  const t = (en: string, hi: string) => (hindi ? hi : en);
   const [phase, setPhase] = useState<Phase>("connecting");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [index, setIndex] = useState(0);
@@ -89,7 +91,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
 
     (async () => {
       try {
-        if (!navigator.mediaDevices?.getUserMedia || !pickMime()) throw new Error("This phone's browser cannot record audio. Please type instead.");
+        if (!navigator.mediaDevices?.getUserMedia || !pickMime()) throw new Error(t("This phone's browser cannot record audio. Please type instead.", "इस फ़ोन का ब्राउज़र आवाज़ रिकॉर्ड नहीं कर सकता। कृपया लिखकर भरें।"));
         const [mic, p] = await Promise.all([
           navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }),
           api<{ questions: Question[] }>("GET", "/voice/prompts"),
@@ -142,7 +144,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
 
         mic.getTracks().forEach((t) => t.stop());
         if (!run.alive || (ended.current && pending.length === 0)) return;
-        if (pending.length === 0) throw new Error("Nothing was heard. Please type instead.");
+        if (pending.length === 0) throw new Error(t("Nothing was heard. Please type instead.", "कुछ सुनाई नहीं दिया। कृपया लिखकर भरें।"));
 
         // Most answers are text already; wait for the last one, then read the numbers.
         setPhase("reading");
@@ -154,7 +156,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
 
       } catch (e: any) {
         if (stopped()) return;
-        setError(e?.name === "NotAllowedError" ? "Microphone permission was blocked. Allow it in the browser, or type instead." : e?.message ?? "The call could not continue. Please type instead.");
+        setError(e?.name === "NotAllowedError" ? t("Microphone permission was blocked. Allow it in the browser, or type instead.", "माइक की अनुमति नहीं मिली। ब्राउज़र में अनुमति दें, या लिखकर भरें।") : e?.message ?? t("The call could not continue. Please type instead.", "कॉल आगे नहीं चल पाई। कृपया लिखकर भरें।"));
         setPhase("error");
         stream.current?.getTracks().forEach((t) => t.stop());
       }
@@ -172,11 +174,11 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
   const status =
-    phase === "connecting" ? "Connecting…"
-    : phase === "asking" ? "Asking…"
-    : phase === "listening" ? "Listening — speak now"
-    : phase === "reading" ? "Filling the form…"
-    : "Call ended";
+    phase === "connecting" ? t("Connecting…", "जुड़ रहा है…")
+    : phase === "asking" ? t("Asking…", "सवाल पूछ रहे हैं…")
+    : phase === "listening" ? t("Listening — speak now", "सुन रहे हैं — अब बोलिए")
+    : phase === "reading" ? t("Filling the form…", "फ़ॉर्म भर रहे हैं…")
+    : t("Call ended", "कॉल खत्म");
 
   return (
     <section aria-live="polite" style={{ background: "#18201C", color: "#EEF0EF", borderRadius: 24, padding: "28px 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: 18, textAlign: "center", animation: "rise 300ms ease both" }}>
@@ -205,7 +207,7 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
       {(phase === "reading" || phase === "connecting") && <span className="spinner" style={{ width: 28, height: 28 }} aria-hidden="true" />}
       {heard && phase !== "error" && phase !== "reading" && (
         <p lang="hi" style={{ color: "#C9D2CD", fontSize: 15, background: "#232D28", padding: "8px 14px", borderRadius: 12 }}>
-          <span style={{ color: "#7FD29C" }}>✓ Suna:</span> {heard.text}
+          <span style={{ color: "#7FD29C" }}>✓ {t("Heard", "सुना")}:</span> {heard.text}
         </p>
       )}
       {phase === "error" && <p role="alert" style={{ background: "#3B211B", color: "#F08A72", padding: "10px 14px", borderRadius: 12 }}>{error}</p>}
@@ -213,13 +215,13 @@ export default function VoiceLog({ audio, ac, onResult, onCancel }: { audio: HTM
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
         {phase === "listening" && (
           <button type="button" onClick={() => skip.current()} style={{ minHeight: 48, padding: "0 18px", borderRadius: 999, border: "1px solid #3A463F", background: "transparent", color: "#EEF0EF", font: "inherit", cursor: "pointer" }}>
-            Next question ›
+            {t("Next question ›", "अगला सवाल ›")}
           </button>
         )}
         {phase !== "reading" && (
-          <button type="button" onClick={() => { hangUp(); onCancel(); }} aria-label="End call and type instead"
+          <button type="button" onClick={() => { hangUp(); onCancel(); }} aria-label={t("End call and type instead", "कॉल खत्म करके लिखकर भरें")}
             style={{ minHeight: 64, padding: "0 28px", borderRadius: 999, border: 0, background: "#C2412D", color: "#fff", font: "inherit", fontWeight: 700, fontSize: 18, cursor: "pointer" }}>
-            {phase === "error" ? "Type instead" : "✕ End call"}
+            {phase === "error" ? t("Type instead", "लिखकर भरें") : t("✕ End call", "✕ कॉल खत्म करें")}
           </button>
         )}
       </div>

@@ -28,7 +28,17 @@ export function Num({ value, digits = 1, unit, kind }: { value: number | null | 
   );
 }
 
-export function Legend() {
+export function Legend({ hindi = false }: { hindi?: boolean }) {
+  if (hindi) {
+    return (
+      <div className="legend" role="note" aria-label="निशानों का मतलब">
+        <span><strong>●</strong> नापा हुआ (Measured) — मेस स्टाफ ने भरा</span>
+        <span><strong>◆</strong> हिसाब से (Calculated) — कोड ने गिना</span>
+        <span><strong>▲</strong> अनुमान (Estimated)</span>
+        <span><strong>○</strong> डेमो डेटा (Simulated)</span>
+      </div>
+    );
+  }
   return (
     <div className="legend" role="note" aria-label="What the labels mean">
       <span><strong>●</strong> Measured — entered by mess staff</span>

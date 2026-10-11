@@ -26,7 +26,7 @@ function useHash() {
 
 const HOME: Record<Role, string> = { worker: "/entry", manager: "/dashboard", student: "/feedback" };
 const NAV: Record<Role, [string, string, IconName][]> = {
-  worker: [["/entry", "Log a meal", "bowl"]],
+  worker: [["/entry", "खाना दर्ज करें", "bowl"]], // mess staff see their screens in Hindi
   manager: [["/dashboard", "Dashboard", "chart"], ["/entry", "Log a meal", "bowl"], ["/impact", "Experiments", "flask"]],
   student: [["/feedback", "Rate today's food", "thumbsUp"], ["/impact", "What's changing", "flask"]],
 };
@@ -73,6 +73,7 @@ export default function App() {
   useEffect(() => {
     const el = document.documentElement;
     if (session) el.dataset.role = session.role; else delete el.dataset.role;
+    el.lang = session?.role === "worker" ? "hi" : "en";
   }, [session]);
 
   if (!session) return <AuthShell><Login onLogin={(s) => { saveSession(s); setSession(s); go(HOME[s.role]); }} /></AuthShell>;
@@ -87,7 +88,9 @@ export default function App() {
   let content;
   let banner: ReactNode = null;
   if (page === "entry") {
-    banner = <Hero as="p" icon="bowl" title="Let's log this meal!" sub="Bol ke batao in Hindi, or type what was cooked and what was left over." decor={["carrot", "chapati", "tomato"]} />;
+    banner = session.role === "worker"
+      ? <Hero as="p" icon="bowl" title="आज का खाना दर्ज करें!" sub="बोलकर बताइए या खुद लिखिए — कितना बना और कितना बचा।" decor={["carrot", "chapati", "tomato"]} />
+      : <Hero as="p" icon="bowl" title="Let's log this meal!" sub="Bol ke batao in Hindi, or type what was cooked and what was left over." decor={["carrot", "chapati", "tomato"]} />;
     content = <Entry role={session.role} />;
   } else if (page === "dashboard") content = <Dashboard />;
   else if (page === "review" && id) {
@@ -111,15 +114,15 @@ export default function App() {
             <a key={path} href={"#" + path} aria-current={"/" + page === path ? "page" : undefined}><Icon name={icon} size={18} />{label}</a>
           ))}
           <span className="role-chip"><Icon name={meta.icon} size={15} />{meta.label}</span>
-          <button type="button" onClick={() => { saveSession(null); setSession(null); go("/"); }}><Icon name="logout" size={16} />Log out</button>
+          <button type="button" onClick={() => { saveSession(null); setSession(null); go("/"); }}><Icon name="logout" size={16} />{session.role === "worker" ? "लॉग आउट" : "Log out"}</button>
         </nav>
       </header>
       {banner}
       <main id="main" tabIndex={-1} className="stack" style={{ gap: 20, outline: "none" }}>
         {content}
       </main>
-      <Legend />
-      <p className="small muted tagline"><Icon name="loop" size={14} /> AI recommends. Humans decide. Measured outcomes determine what works.</p>
+      <Legend hindi={session.role === "worker"} />
+      <p className="small muted tagline"><Icon name="loop" size={14} /> {session.role === "worker" ? "AI सुझाव देता है, फ़ैसला इंसान करते हैं, नतीजे बताते हैं क्या काम आया।" : "AI recommends. Humans decide. Measured outcomes determine what works."}</p>
     </div>
   );
 }
