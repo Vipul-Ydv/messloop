@@ -56,6 +56,7 @@ export default function Dashboard() {
   const nameOf = (id: string) => asList<Item>(items.data, "items").find((i) => i.itemId === id)?.name ?? id;
   const simulated = !!s?.isSimulated;
   const calc = simulated ? "Simulated" : "Calculated";
+  const latestSim = s?.latestIsSimulated ?? simulated;
 
   return (
     <>
@@ -85,10 +86,10 @@ export default function Dashboard() {
           <>
             <div className="grid grid-4">
               <Kpi icon="tray" tone="coral" label="Latest waste per 100 servings" hint="Leftover food per 100 servings on the latest day." foot={s.latestDate ? `On ${niceDate(s.latestDate)}` : undefined}>
-                <Num value={s.latestWastePer100} kind={calc} />
+                <Num value={s.latestWastePer100} kind={latestSim ? "Simulated" : "Calculated"} />
               </Kpi>
               <Kpi icon="scale" tone="sun" label="Latest food wasted" hint="Total leftover quantity on the latest day." foot={s.latestDate ? `On ${niceDate(s.latestDate)}` : undefined}>
-                <Num value={s.latestWasteQty} digits={1} kind={simulated ? "Simulated" : "Measured"} />
+                <Num value={s.latestWasteQty} digits={1} kind={latestSim ? "Simulated" : "Measured"} />
               </Kpi>
               <Kpi icon="alert" tone="coral" label="Dishes above the limit" hint="Dishes flagged by the repeat-waste rule.">
                 <span className="num">{s.alerts.length}</span>

@@ -88,6 +88,7 @@ export interface Summary {
   latestDate: string | null;
   latestWasteQty: number;
   latestWastePer100: number | null;
+  latestIsSimulated?: boolean;
   topWastefulItems: ItemStat[];
   alerts: ItemStat[];
   trend: { date: string; itemId: string; name: string; slotId: string; wastePer100: number; wastePct: number; interventionId: string | null }[];

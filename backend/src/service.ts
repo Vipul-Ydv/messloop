@@ -137,6 +137,8 @@ export async function summary() {
     latestDate,
     latestWasteQty: sum(latest.map((r) => r.leftoverQty)),
     latestWastePer100: latest.length ? pooledPer100(latest) : null,
+    // The latest day can be real even while the history is simulated; label it by its own records.
+    latestIsSimulated: latest.some((r) => r.isSimulated),
     topWastefulItems: [...perItem].sort((a, b) => b.pooledWastePer100 - a.pooledWastePer100).slice(0, 5),
     alerts: perItem.filter((p) => p.alert),
     trend: [...d.waste].sort((a, b) => (a.date < b.date ? -1 : 1)).map((r) => ({
