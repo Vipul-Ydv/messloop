@@ -11,7 +11,7 @@ interface Options {
   suggestedDate: string | null;
   reasons: { id: string; label: string; hindi: string }[];
 }
-interface Result { name: string; avgRating: number; ratingCount: number; topReasons: string[] }
+interface Result { name: string; avgRating: number; ratingCount: number; topReasons: string[]; poll: { instead: string; sharePct: number; votes: number } | null }
 
 const FACES = [
   { n: 1, face: "😖", label: "Bilkul nahi" },
@@ -31,6 +31,8 @@ export default function Feedback() {
   const [itemId, setItemId] = useState("");
   const [rating, setRating] = useState<number | null>(null);
   const [reasons, setReasons] = useState<string[]>([]);
+  const [instead, setInstead] = useState<string | null>(null);
+  const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -53,7 +55,7 @@ export default function Feedback() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api<Result>("POST", "/feedback", { itemId, rating, reasons });
+      const r = await api<Result>("POST", "/feedback", { itemId, rating, reasons, instead, idea: idea.trim() || undefined });
       markVoted(itemId);
       setResult(r);
     } catch (e) {
@@ -71,9 +73,12 @@ export default function Feedback() {
           {result.name} is now rated <strong className="num">{result.avgRating.toFixed(1)} / 5</strong> by {result.ratingCount} students.
         </p>
         {result.topReasons.length > 0 && <p>Most common reasons food is left: <strong>{result.topReasons.join(", ")}</strong>.</p>}
+        {result.poll && (
+          <p><strong className="num">{result.poll.sharePct}%</strong> of {result.poll.votes} votes want <strong>{opts.items.find((i) => i.itemId === result.poll!.instead)?.name}</strong> instead of {result.name}.</p>
+        )}
         <p className="muted">The agent reads these ratings the next time it looks at this dish, so your answer can change what's cooked.</p>
         <div className="row">
-          <button className="btn btn-ghost" onClick={() => { setResult(null); setRating(null); setReasons([]); }}>Rate another dish</button>
+          <button className="btn btn-ghost" onClick={() => { setResult(null); setRating(null); setReasons([]); setInstead(null); setIdea(""); }}>Rate another dish</button>
           <a className="btn" href="#/impact">See what changed in the mess</a>
         </div>
       </Card>
@@ -90,7 +95,7 @@ export default function Feedback() {
         <p className="muted">How was the dish today? It takes 5 seconds and it's anonymous.</p>
         <div className="field">
           <label htmlFor="dish">Dish</label>
-          <select id="dish" className="input" value={itemId} onChange={(e) => { setItemId(e.target.value); setRating(null); setReasons([]); }}>
+          <select id="dish" className="input" value={itemId} onChange={(e) => { setItemId(e.target.value); setRating(null); setReasons([]); setInstead(null); }}>
             {opts.items.map((i) => <option key={i.itemId} value={i.itemId}>{i.name}</option>)}
           </select>
         </div>
@@ -128,6 +133,26 @@ export default function Feedback() {
                 </button>
               );
             })}
+          </div>
+          <div className="stack" style={{ gap: 10, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+            <h2 lang="hi">Iski jagah kya banna chahiye?</h2>
+            <p className="small muted">What should be made instead? Optional. Your vote goes straight into the evidence the agent uses.</p>
+            <div className="row" style={{ gap: 8 }}>
+              {opts.items.filter((i) => i.itemId !== itemId).map((i) => {
+                const on = instead === i.itemId;
+                return (
+                  <button key={i.itemId} type="button" onClick={() => setInstead(on ? null : i.itemId)} aria-pressed={on}
+                    style={{ minHeight: 44, padding: "6px 16px", borderRadius: 999, border: `2px solid ${on ? "var(--brand)" : "var(--line)"}`, background: on ? "var(--brand)" : "var(--surface)", color: on ? "#fff" : "var(--ink)", font: "inherit", fontWeight: 600, cursor: "pointer" }}>
+                    {on ? "✓ " : ""}{i.name}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="field">
+              <label htmlFor="idea">Ya kuch aur? <span className="muted" style={{ fontWeight: 400 }}>(Something else? Optional)</span></label>
+              <input id="idea" className="input" style={{ fontSize: 16 }} value={idea} maxLength={60} onChange={(e) => setIdea(e.target.value)} placeholder="e.g. Rajma, Kadhi pakoda" />
+              <span className="hint">New ideas go to the mess manager. The agent only compares dishes the mess has already cooked.</span>
+            </div>
           </div>
           {error && <ErrorNote error={error} />}
           <button className="btn" onClick={send} disabled={busy || !itemId}>{busy ? "Sending…" : "Bhejo (Send)"}</button>

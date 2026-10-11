@@ -7,6 +7,7 @@ import { BeforeAfter, HBars, TrendChart } from "../charts.tsx";
 import { asList, useLoad } from "../hooks.ts";
 import { Icon } from "../Icon.tsx";
 import AgentAlerts, { type AgentAlert } from "../AgentAlerts.tsx";
+import StudentIdeas, { type Suggestions } from "../StudentIdeas.tsx";
 import { RecommendationCard, STRENGTH_RANK, actionSentence } from "../reco.tsx";
 import { Card, EmptyState, ErrorNote, Hero, Kpi, Lbl, Num, SimBadge, SkeletonGrid, Skeleton, itemIcon, niceDate } from "../ui.tsx";
 
@@ -15,6 +16,7 @@ export default function Dashboard() {
   const recs = useLoad(() => api("GET", "/recommendations?status=pending"));
   const items = useLoad(() => api("GET", "/items"));
   const alerts = useLoad(() => api<AgentAlert[]>("GET", "/alerts"));
+  const ideas = useLoad(() => api<Suggestions>("GET", "/feedback/suggestions"));
   const [resetNote, setResetNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [genError, setGenError] = useState<unknown>(null);
@@ -39,7 +41,7 @@ export default function Dashboard() {
     try {
       await api("POST", "/admin/seed?includeLatest=false");
       setResetNote("Demo reset. Log Aloo Gobi for 8 Oct (50 kg cooked, 23 kg left, 115 plates) to start the story.");
-      sum.reload(); recs.reload(); alerts.reload();
+      sum.reload(); recs.reload(); alerts.reload(); ideas.reload();
     } catch (e) { setGenError(e); } finally { setBusy(false); }
   }
 
@@ -136,7 +138,10 @@ export default function Dashboard() {
               ) : null}
             </Card>
 
-            <AgentAlerts alerts={alerts.data ?? []} onChecked={() => { alerts.reload(); sum.reload(); }} delay={90} />
+            <div className="grid grid-2">
+              <AgentAlerts alerts={alerts.data ?? []} onChecked={() => { alerts.reload(); sum.reload(); }} delay={90} />
+              <StudentIdeas data={ideas.data} delay={110} />
+            </div>
 
             <div className="grid grid-2">
               <Card delay={120}>

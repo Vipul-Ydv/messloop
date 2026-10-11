@@ -61,6 +61,11 @@ const routes: [string, RegExp, Handler][] = [
     return json(201, await feedback.submit(req.body));
   }],
 
+  ["GET", /^\/feedback\/suggestions$/, async (req) => {
+    requireRole(req, ["manager"]);
+    return json(200, await feedback.suggestions());
+  }],
+
   ["GET", /^\/alerts$/, async (req) => {
     requireRole(req, ["manager"]);
     return json(200, await alerts.listAlerts());

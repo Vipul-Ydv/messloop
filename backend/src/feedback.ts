@@ -38,8 +38,17 @@ export async function submit(body: any) {
     throw new HttpError(400, "VALIDATION_ERROR", "Pick up to three reasons from the list.", "reasons");
   }
 
+  // Optional: what should be made instead — another dish we cook (a vote), or an idea in their words.
+  const instead = typeof body?.instead === "string" && body.instead ? body.instead : null;
+  if (instead && (instead === itemId || !(await get(HPK, `ITEM#${instead}`)))) {
+    throw new HttpError(400, "VALIDATION_ERROR", "Pick another dish from the list.", "instead");
+  }
+  const idea = typeof body?.idea === "string" ? body.idea.trim().replace(/\s+/g, " ").slice(0, 60) : "";
+
   const at = new Date().toISOString();
-  await put({ PK: HPK, SK: `FEEDBACK#${at}#${itemId}`, itemId, rating, reasons, createdAt: at, isSimulated: false });
+  await put({ PK: HPK, SK: `FEEDBACK#${at}#${itemId}`, itemId, rating, reasons, instead, idea: idea || undefined, createdAt: at, isSimulated: false });
+  const poll = instead ? await voteInstead(itemId, instead) : null;
+  if (idea) await put({ PK: HPK, SK: `IDEA#${at}#${itemId}`, itemId, text: idea, createdAt: at, isSimulated: false });
 
   // Add the vote to the dish's rating counts (read-modify-write is fine at mess scale).
   const agg = (await get(HPK, `RATING#${itemId}`)) ?? { PK: HPK, SK: `RATING#${itemId}`, itemId, counts: [0, 0, 0, 0, 0], topReasons: [], isSimulated: false };
@@ -61,5 +70,53 @@ export async function submit(body: any) {
     avgRating: Math.round(avg * 10) / 10,
     ratingCount: total,
     topReasons: topReasons.map((r) => REASONS.find((x) => x.id === r)?.label ?? r),
+    poll,
+  };
+}
+
+/**
+ * A vote for what should replace a dish. It lands in the same poll the agent reads as
+ * evidence. A new poll lists every other dish we cook, so one vote never narrows the
+ * agent's options to a single dish.
+ */
+async function voteInstead(itemId: string, instead: string) {
+  const SK = `POLL#replace-${itemId}`;
+  let poll = await get(HPK, SK);
+  if (!poll) {
+    const others = (await query(HPK, "ITEM#")).map((i: any) => i.itemId).filter((id: string) => id !== itemId);
+    poll = { PK: HPK, SK, pollId: `replace-${itemId}`, targetItemId: itemId, counts: Object.fromEntries(others.map((id: string) => [id, 0])), isSimulated: false };
+  }
+  const counts = { ...poll.counts, [instead]: (poll.counts?.[instead] ?? 0) + 1 };
+  await put({ ...poll, counts, realVotes: (poll.realVotes ?? 0) + 1 });
+  const total = Object.values(counts).reduce((a: number, b) => a + (b as number), 0) as number;
+  return { instead, sharePct: Math.round((counts[instead] / total) * 100), votes: total };
+}
+
+/** For the manager: votes for what should replace each dish, and students' own ideas. */
+export async function suggestions() {
+  const [polls, ideas, items] = await Promise.all([query(HPK, "POLL#"), query(HPK, "IDEA#"), query(HPK, "ITEM#")]);
+  const name = (id: string) => items.find((i: any) => i.itemId === id)?.name ?? id;
+  const grouped = new Map<string, { text: string; count: number; forItem: string }>();
+  for (const i of ideas) {
+    const key = `${i.itemId}|${String(i.text).toLowerCase()}`;
+    const g = grouped.get(key) ?? { text: i.text, count: 0, forItem: name(i.itemId) };
+    g.count += 1;
+    grouped.set(key, g);
+  }
+  return {
+    polls: polls.map((p: any) => {
+      const total = Object.values(p.counts as Record<string, number>).reduce((a, b) => a + b, 0);
+      return {
+        targetItemId: p.targetItemId,
+        target: name(p.targetItemId),
+        totalVotes: total,
+        realVotes: p.realVotes ?? (p.isSimulated ? 0 : total),
+        isSimulated: !!p.isSimulated,
+        options: Object.entries(p.counts as Record<string, number>)
+          .map(([id, n]) => ({ itemId: id, name: name(id), votes: n, pct: total ? Math.round((n / total) * 100) : 0 }))
+          .sort((a, b) => b.votes - a.votes),
+      };
+    }).filter((p: any) => p.totalVotes > 0),
+    ideas: [...grouped.values()].sort((a, b) => b.count - a.count).slice(0, 12),
   };
 }
