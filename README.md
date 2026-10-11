@@ -62,6 +62,7 @@ aws cloudformation deploy --stack-name messloop --template-file .aws-sam/package
 - App: https://messloop-web-sitebucket-agfku78revhs.s3.us-east-1.amazonaws.com/index.html
 - API: https://e6rcj1pacc.execute-api.us-east-1.amazonaws.com
 - Demo video (2:55): https://youtu.be/1IT8X0xW6p8
+- Blog: https://builder.aws.com/content/3KY2islm9Ux3qO7vknuZ9tKogBv/the-dish-nobody-eats-keeps-coming-back-a-food-waste-agent-on-aws-that-mess-staff-talk-to-in-hindi
 
 Role codes are shared privately with the team, never in this repo.
 
