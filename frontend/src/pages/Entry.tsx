@@ -103,10 +103,7 @@ export default function Entry({ role }: { role: Role }) {
   return (
     <div className="grid grid-2" style={{ alignItems: "start" }}>
       <Card>
-        <div className="stack" style={{ gap: 4 }}>
-          <h1>Log a meal</h1>
-          <p className="muted">Weigh what was cooked and what is left in the serving vessels after service.</p>
-        </div>
+        <p className="muted">Weigh what was cooked and what is left in the serving vessels after service.</p>
         {mode === "choose" && (
           <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
             <button type="button" className="btn" onClick={startCall}

@@ -1,334 +1,202 @@
-// Manager dashboard. Reads top to bottom as the loop: problem → evidence → action →
-// status → outcome (§11). Alerts come from the server's rules, never from the AI (R3).
+// Manager dashboard: KPIs, next best action, trend + dish-wise charts, Waste Experiments.
+// Data comes from GET /analytics/summary and GET /recommendations (manager-only, enforced server-side).
 
-import { useCallback, useEffect, useState } from "react";
-import { api, type Recommendation, type Summary } from "../api.ts";
-import { Card, ErrorNote, Lbl, Loading, Num, SimBadge, Status, fmt, niceDate } from "../ui.tsx";
-import { go } from "../nav.ts";
+import { useEffect, useState } from "react";
+import { api, type Item, type Recommendation, type Summary } from "../api.ts";
+import { BeforeAfter, HBars, TrendChart } from "../charts.tsx";
+import { asList, useLoad } from "../hooks.ts";
+import { Icon } from "../Icon.tsx";
+import AgentAlerts, { type AgentAlert } from "../AgentAlerts.tsx";
+import { RecommendationCard, STRENGTH_RANK, actionSentence } from "../reco.tsx";
+import { Card, EmptyState, ErrorNote, Hero, Kpi, Lbl, Num, SimBadge, SkeletonGrid, Skeleton, itemIcon, niceDate } from "../ui.tsx";
 
 export default function Dashboard() {
-  const [data, setData] = useState<Summary | null>(null);
-  const [recs, setRecs] = useState<Recommendation[]>([]);
-  const [error, setError] = useState<unknown>(null);
-  const [running, setRunning] = useState(false);
-  const [runNote, setRunNote] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<AgentAlert[]>([]);
+  const sum = useLoad(() => api<Summary>("GET", "/analytics/summary"));
+  const recs = useLoad(() => api("GET", "/recommendations?status=pending"));
+  const items = useLoad(() => api("GET", "/items"));
+  const alerts = useLoad(() => api<AgentAlert[]>("GET", "/alerts"));
+  const [resetNote, setResetNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [genError, setGenError] = useState<unknown>(null);
+  const [genDone, setGenDone] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const [s, r] = await Promise.all([api<Summary>("GET", "/analytics/summary"), api<Recommendation[]>("GET", "/recommendations")]);
-      setData(s);
-      setRecs(r);
-      api<AgentAlert[]>("GET", "/alerts").then(setAlerts).catch(() => {});
-    } catch (e) {
-      setError(e);
-    }
-  }, []);
-  useEffect(() => { load(); }, [load]);
-  // While the agent is working (or a just-logged meal may wake it), refresh quietly.
+  const list = asList<Recommendation>(recs.data, "recommendations").filter((r) => r.status === "pending");
+  const sorted = list.slice().sort((a, b) => STRENGTH_RANK[a.evidenceStrength] - STRENGTH_RANK[b.evidenceStrength] || b.createdAt.localeCompare(a.createdAt));
+  const next = sorted[0];
+  const anyRunning = list.some((r) => r.aiStatus === "running");
+
+  // The agent works in the background; poll until its answer lands, and pick up its alerts.
   useEffect(() => {
-    if (!recs.some((r) => r.aiStatus === "running")) return;
-    const t = setTimeout(load, 4000);
-    return () => clearTimeout(t);
-  }, [recs, load]);
+    if (!anyRunning) return;
+    const t = setInterval(() => { recs.reload(); alerts.reload(); }, 4000);
+    return () => clearInterval(t);
+  }, [anyRunning, recs.reload, alerts.reload]);
 
-  async function runAnalysis() {
-    setRunning(true);
-    setRunNote(null);
-    try {
-      const out = await api<any[]>("POST", "/recommendations/generate");
-      const made = out.filter((r) => r.recId);
-      const thin = out.filter((r) => r.status === "insufficient_evidence");
-      setRunNote(
-        made.length
-          ? `${made.length} new recommendation${made.length > 1 ? "s" : ""} — our AI is writing the explanation now.`
-          : thin.length
-            ? `No new recommendation. ${thin.map((t) => t.name).join(", ")}: insufficient evidence (fewer than 3 records).`
-            : "No new recommendation: nothing new crossed the rule, or it already has a pending suggestion or active change.",
-      );
-      if (made.length === 1) go(`/review/${made[0].recId}`);
-      else await load();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setRunning(false);
-    }
-  }
-
+  // Demo only (all data simulated): back to the starting story, ready to record again.
   async function resetDemo() {
-    if (!window.confirm("Reset the demo? All logged meals, suggestions and trials go back to the starting simulated data.")) return;
-    setRunning(true);
+    if (!window.confirm("Reset the demo? All logged meals, suggestions, trials and notifications go back to the starting simulated data.")) return;
+    setBusy(true); setResetNote(null);
     try {
       await api("POST", "/admin/seed?includeLatest=false");
-      setRunNote("Demo reset. Log Aloo Gobi for 8 Oct (50 kg cooked, 23 kg left, 115 plates) to start the story.");
-      await load();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setRunning(false);
-    }
+      setResetNote("Demo reset. Log Aloo Gobi for 8 Oct (50 kg cooked, 23 kg left, 115 plates) to start the story.");
+      sum.reload(); recs.reload(); alerts.reload();
+    } catch (e) { setGenError(e); } finally { setBusy(false); }
   }
 
-  if (error) return <ErrorNote error={error} />;
-  if (!data) return <Loading what="Loading dashboard" />;
+  async function generate() {
+    setBusy(true); setGenError(null); setGenDone(false);
+    try {
+      await api("POST", "/recommendations/generate");
+      setGenDone(true);
+      recs.reload(); sum.reload();
+    } catch (e) { setGenError(e); } finally { setBusy(false); }
+  }
 
-  const top = data.topWastefulItems[0];
-  const pending = recs.filter((r) => r.status === "pending");
+  const s = sum.data;
+  const nameOf = (id: string) => asList<Item>(items.data, "items").find((i) => i.itemId === id)?.name ?? id;
+  const simulated = !!s?.isSimulated;
+  const calc = simulated ? "Simulated" : "Calculated";
 
   return (
     <>
-      <div className="row between" style={{ alignItems: "flex-end" }}>
-        <div className="stack" style={{ gap: 4 }}>
-          <p className="small muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>Demo hostel · Lunch dry sabzi</p>
-          <h1>Mess dashboard</h1>
-        </div>
+      <Hero icon="chart" title="Your mess at a glance" sub="The agent gathers the evidence. You decide what changes." decor={["leaf", "bowl", "carrot"]}>
         <div className="row">
-          <SimBadge show={data.isSimulated} />
-          {data.isSimulated && <button className="btn btn-ghost" onClick={resetDemo} disabled={running}>Reset demo</button>}
-          <button className="btn" onClick={runAnalysis} disabled={running}>
-            {running ? <><span className="spinner" aria-hidden="true" /> Checking rules…</> : "Run analysis"}
-          </button>
+          <SimBadge show={simulated || !s} />
+          {simulated ? <button type="button" className="btn btn-ghost" onClick={resetDemo} disabled={busy}><Icon name="refresh" size={16} /> Reset demo</button> : null}
         </div>
-      </div>
-      {runNote && <p className="note note-info" role="status">{runNote}</p>}
-      {data.latestDate !== new Date().toLocaleDateString("en-CA") && (
+      </Hero>
+      {resetNote ? <p className="note note-info" role="status">{resetNote}</p> : null}
+      {s && s.latestDate !== new Date().toLocaleDateString("en-CA") ? (
         <p className="note note-warn" role="status">
-          <span aria-hidden="true">⏰</span> Today's meal isn't logged yet. Mess staff can <a href="#/entry">bol ke batao</a> (answer out loud in Hindi) or type it in.
+          <Icon name="clock" size={16} /> Today's meal isn't logged yet. Mess staff can <a href="#/entry">bol ke batao</a> (answer out loud in Hindi) or type it in.
         </p>
-      )}
+      ) : null}
 
-      <div className="grid grid-4">
-        <Card delay={0}>
-          <p className="stat-label">Wasted on {data.latestDate ? niceDate(data.latestDate) : "—"}</p>
-          <p className="stat-value num">{fmt(data.latestWasteQty)}<small>kg</small></p>
-          <Lbl kind="Calculated" />
-        </Card>
-        <Card delay={70}>
-          <p className="stat-label">Per 100 plates, that day</p>
-          <p className="stat-value num">{fmt(data.latestWastePer100)}<small>kg</small></p>
-          <Lbl kind="Calculated" />
-        </Card>
-        <Card delay={140}>
-          <p className="stat-label">Most wasted dish (last 5 meals)</p>
-          <p className="stat-value" style={{ fontSize: 30 }}>{top?.name ?? "—"}</p>
-          {top && <span className="small muted"><Num value={top.pooledWastePer100} unit="kg / 100 plates" kind="Calculated" /></span>}
-        </Card>
-        <Card delay={210}>
-          <p className="stat-label">Waiting for your decision</p>
-          <p className="stat-value num">{data.pendingRecommendations}</p>
-          {pending[0] ? <a href={`#/review/${pending[0].recId}`}>Review now →</a> : <span className="small muted">Nothing pending</span>}
-        </Card>
-      </div>
+      {sum.loading && !s ? <SkeletonGrid count={4} what="Loading the dashboard" /> : null}
+      <ErrorNote error={sum.error} />
+      {sum.error ? <button className="btn btn-ghost" type="button" onClick={sum.reload}><Icon name="refresh" size={16} /> Try again</button> : null}
 
-      {data.alerts.length === 0 && <p className="note note-good">✓ No dish is over the {data.threshold}% waste rule right now.</p>}
-      {data.alerts.map((a) => {
-        const rec = recs.find((r) => r.targetItemId === a.itemId && r.slotId === a.slotId);
-        const isActive = data.activeInterventions.some((i) => i.action.fromItemId === a.itemId);
-        return (
-          <Card key={a.itemId + a.slotId} delay={260} style={{ borderLeft: "6px solid var(--bad)" }}>
-            <div className="row between">
-              <h2><span aria-hidden="true">⚠</span> Recurring waste: {a.name}</h2>
-              {rec ? <Status value={rec.status} /> : isActive ? <Status value="active" /> : <span className="status status-pending">No suggestion yet</span>}
+      {s ? (
+        s.latestDate === null && !s.trend.length ? (
+          <Card><EmptyState icon="scale" title="No meals logged yet" action={<a className="btn" href="#/entry">Log the first meal</a>}>
+            Once the mess logs what was cooked and what was left, your charts will appear here.
+          </EmptyState></Card>
+        ) : (
+          <>
+            <div className="grid grid-4">
+              <Kpi icon="tray" tone="coral" label="Latest waste per 100 servings" hint="Leftover food per 100 servings on the latest day." foot={s.latestDate ? `On ${niceDate(s.latestDate)}` : undefined}>
+                <Num value={s.latestWastePer100} kind={calc} />
+              </Kpi>
+              <Kpi icon="scale" tone="sun" label="Latest food wasted" hint="Total leftover quantity on the latest day." foot={s.latestDate ? `On ${niceDate(s.latestDate)}` : undefined}>
+                <Num value={s.latestWasteQty} digits={1} kind={simulated ? "Simulated" : "Measured"} />
+              </Kpi>
+              <Kpi icon="alert" tone="coral" label="Dishes above the limit" hint="Dishes flagged by the repeat-waste rule.">
+                <span className="num">{s.alerts.length}</span>
+              </Kpi>
+              <Kpi icon="sparkle" tone="lav" label="Recommendations waiting" hint="The agent's suggestions that need your decision.">
+                <span className="num">{s.pendingRecommendations}</span>
+              </Kpi>
             </div>
-            <p>
-              Over <strong>{data.threshold}%</strong> wasted in <strong>{a.exceeded} of its last {a.n}</strong> meals.
-              Pooled: <Num value={a.pooledWastePer100} unit="kg per 100 plates" kind="Calculated" />
-            </p>
-            <p className="small muted">Flagged by a fixed rule (over {data.threshold}% in at least 3 of the last 5), not by AI.</p>
-            {rec ? (
+
+            <Card className="next-action" delay={60}>
               <div className="row between">
-                <p>
-                  Evidence strength: <strong>{rec.evidenceStrength}</strong> · Suggested
-                  {rec.aiStatus === "running" ? " (agent investigating…)" : rec.source === "ai" ? " (our AI agent)" : " (template)"}:{" "}
-                  <strong>{describe(rec)}</strong>
-                </p>
-                <a className="btn btn-ghost" href={`#/review/${rec.recId}`}>{rec.status === "pending" ? "Review ▸" : "Open ▸"}</a>
-              </div>
-            ) : !isActive && (
-              <p className="small">Press <strong>Run analysis</strong> to build the evidence and get a suggestion.</p>
-            )}
-          </Card>
-        );
-      })}
-
-      <div className="grid grid-2">
-        <Card delay={320}>
-          <div className="row between">
-            <h2>Waste per 100 plates, meal by meal</h2>
-            <Lbl kind="Calculated" />
-          </div>
-          <TrendChart data={data} />
-        </Card>
-        <Card delay={380}>
-          <h2>Dishes by waste (last 5 meals each)</h2>
-          <div className="stack" style={{ gap: 10 }}>
-            {data.topWastefulItems.map((t, i) => {
-              const max = Math.max(...data.topWastefulItems.map((x) => x.pooledWastePer100), 1);
-              return (
-                <div key={t.itemId} className="grid" style={{ gridTemplateColumns: "minmax(90px, 130px) 1fr auto", alignItems: "center", gap: 10 }}>
-                  <span>{t.name}{t.alert && <span className="sr-only"> (flagged)</span>}</span>
-                  <div className="hbar"><div style={{ width: `${(t.pooledWastePer100 / max) * 100}%`, background: t.alert ? "var(--bad)" : "var(--muted)", animationDelay: `${450 + i * 80}ms` }} /></div>
-                  <span className="num small">{fmt(t.pooledWastePer100)}{t.alert ? " ⚠" : ""}</span>
+                <div className="row" style={{ gap: 12 }}>
+                  <span className="tile tile-lav" aria-hidden="true"><Icon name="sparkle" size={22} /></span>
+                  <h2>Your next best action</h2>
                 </div>
-              );
-            })}
-          </div>
-          <p className="small muted">kg left over per 100 plates. ⚠ = over the rule.</p>
-        </Card>
-      </div>
+                <button type="button" className="btn btn-ghost" onClick={generate} disabled={busy}>
+                  {busy ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={16} />} Look for new recommendations
+                </button>
+              </div>
+              <ErrorNote error={genError} />
+              {genDone && !busy ? <p className="note note-info" role="status">Done. If a dish crossed the rule, the agent is investigating it now; its suggestion shows up below.</p> : null}
+              {recs.loading && !recs.data ? <Skeleton h={160} /> : null}
+              <ErrorNote error={recs.error} />
+              {next ? (
+                <>
+                  <RecommendationCard rec={next} featured />
+                  {sorted.length > 1 ? (
+                    <div className="stack">
+                      <h3>Also waiting ({sorted.length - 1})</h3>
+                      {sorted.slice(1).map((r) => (
+                        <a key={r.recId} className="mini-row" href={`#/review/${r.recId}`}>
+                          <Icon name={itemIcon(r.evidence.targetItem.name)} size={20} />
+                          <span><strong>{r.evidence.targetItem.name}</strong> · {actionSentence(r.content.suggestedAction)}</span>
+                          <Icon name="arrowRight" size={16} />
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : !recs.loading && !recs.error ? (
+                <EmptyState icon="sprout" title="Nothing needs your decision">
+                  When a dish keeps being wasted, a recommendation will wait here for you.
+                </EmptyState>
+              ) : null}
+            </Card>
 
-      <AlertsCard alerts={alerts} onChecked={load} />
+            <AgentAlerts alerts={alerts.data ?? []} onChecked={() => { alerts.reload(); sum.reload(); }} delay={90} />
 
-      <div className="grid grid-2">
-        <Card delay={440}>
-          <h2>Changes being tried</h2>
-          {data.activeInterventions.length === 0 && <p className="muted">None yet. Approving a suggestion starts one.</p>}
-          {data.activeInterventions.map((i) => (
-            <div key={i.interventionId} className="stack" style={{ gap: 4, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
-              <div className="row between"><strong>{actionText(i.action, recs)}</strong><Status value="active" /></div>
-              <p className="small muted">Since {niceDate(i.startDate)} · baseline <Num value={i.baseline.pooledWastePer100} kind="Calculated" /> kg / 100 plates from {i.baseline.nRecords} meals</p>
-              <a href={`#/impact/${i.interventionId}`}>See impact →</a>
+            <div className="grid grid-2">
+              <Card delay={120}>
+                <h2>Waste trend by dish</h2>
+                <p className="small muted">Leftover food per 100 servings, by meal date. Lower is better.</p>
+                {s.trend.length ? <TrendChart points={s.trend} kind={calc} /> : <EmptyState icon="chart" title="No trend yet">Log a few meals to see how waste moves.</EmptyState>}
+              </Card>
+              <Card delay={160}>
+                <h2>Most wasted dishes</h2>
+                <p className="small muted">Pooled waste per 100 servings across all logged meals.</p>
+                {s.topWastefulItems.length ? (
+                  <HBars
+                    unit="per 100 servings"
+                    kind={calc}
+                    rows={s.topWastefulItems.map((it) => ({
+                      key: it.itemId + it.slotId, label: it.name, value: it.pooledWastePer100, icon: itemIcon(it.name),
+                      sub: `${it.n} meals logged · above the limit in ${it.exceeded}`, flag: it.alert ? "Above limit" : undefined,
+                    }))}
+                  />
+                ) : <EmptyState icon="plate" title="No dishes to compare yet" />}
+              </Card>
             </div>
-          ))}
-        </Card>
-        <Card delay={500}>
-          <h2>Recent outcomes</h2>
-          {data.recentOutcomes.length === 0 && <p className="muted">No outcome measured yet. Log a meal after a change to see one.</p>}
-          {data.recentOutcomes.map((o) => (
-            <a key={o.interventionId} href={`#/impact/${o.interventionId}`} className="row between" style={{ textDecoration: "none", color: "inherit", padding: "6px 0" }}>
-              <span className="num"><strong>{fmt(o.baselineWastePer100)} → {fmt(o.postWastePer100)}</strong> kg / 100 plates</span>
-              <span>{o.direction === "decreased" ? "▼" : o.direction === "increased" ? "▲" : "≈"} {o.direction} · n = {o.postRecordCount}</span>
-            </a>
-          ))}
-          {data.recentOutcomes.length > 0 && <p className="small muted">Observed change, not proof of cause.</p>}
-        </Card>
-      </div>
+
+            <Card delay={200}>
+              <div className="row between">
+                <div className="row" style={{ gap: 12 }}><span className="tile tile-forest" aria-hidden="true"><Icon name="flask" size={22} /></span><h2>Waste Experiments</h2></div>
+                <a className="btn btn-ghost" href="#/impact">See all <Icon name="arrowRight" size={16} /></a>
+              </div>
+              {s.activeInterventions.length === 0 && s.recentOutcomes.length === 0 ? (
+                <EmptyState icon="flask" title="No experiments running">Approve a recommendation to start one. We measure again afterwards and compare.</EmptyState>
+              ) : null}
+              {s.activeInterventions.length ? (
+                <div className="stack">
+                  <h3>Running now</h3>
+                  {s.activeInterventions.map((iv) => (
+                    <a key={iv.interventionId} className="mini-row" href={`#/impact/${iv.interventionId}`}>
+                      <Icon name={itemIcon(nameOf(iv.action.fromItemId))} size={20} />
+                      <span><strong>{nameOf(iv.action.fromItemId)}</strong> · {iv.action.type === "replace" && iv.action.toItemId ? `swapped for ${nameOf(iv.action.toItemId)}` : iv.action.type.replace(/_/g, " ")} · since {niceDate(iv.startDate)}</span>
+                      <Icon name="arrowRight" size={16} />
+                    </a>
+                  ))}
+                </div>
+              ) : null}
+              {s.recentOutcomes.length ? (
+                <div className="stack">
+                  <h3>Latest measured comparisons</h3>
+                  <div className="grid grid-3">
+                    {s.recentOutcomes.map((o) => (
+                      <a key={o.interventionId} className="outcome-tile" href={`#/impact/${o.interventionId}`}>
+                        <BeforeAfter impact={o} kind={o.isSimulated || simulated ? "Simulated" : "Calculated"} compact />
+                        <span className="small">{o.postWastePer100 === undefined ? "Waiting for post-change meals" : `${o.direction === "decreased" ? "Lower" : o.direction === "increased" ? "Higher" : "About the same"} after the change`}</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <p className="small muted">Before-and-after numbers show what changed, not proof of why.</p>
+            </Card>
+          </>
+        )
+      ) : null}
     </>
-  );
-}
-
-function describe(rec: Recommendation) {
-  const s = rec.content.suggestedAction;
-  if (s.type === "replace") return `replace ${s.target} with ${s.replacement}`;
-  if (s.type === "investigate") return `look into ${s.target}`;
-  return `${s.type.replace("_", " ")} of ${s.target}`;
-}
-
-function actionText(a: { type: string; fromItemId: string; toItemId?: string }, recs: Recommendation[]) {
-  const names = new Map<string, string>();
-  for (const r of recs) {
-    names.set(r.evidence.targetItem.itemId, r.evidence.targetItem.name);
-    for (const c of r.evidence.candidates) names.set(c.itemId, c.name);
-  }
-  const n = (id?: string) => (id ? names.get(id) ?? id : "");
-  return a.type === "replace" ? `${n(a.fromItemId)} → ${n(a.toItemId)}` : `${a.type.replace("_", " ")}: ${n(a.fromItemId)}`;
-}
-
-/** One bar per logged meal. Colour plus a pattern word in the legend, never colour alone. */
-function TrendChart({ data }: { data: Summary }) {
-  const pts = data.trend;
-  if (pts.length === 0) return <p className="muted">No meals logged yet.</p>;
-  const flagged = new Set(data.alerts.map((a) => a.itemId));
-  const baseline = data.activeInterventions[0]?.baseline.pooledWastePer100 ?? data.alerts[0]?.pooledWastePer100;
-  const W = 640, H = 240, padL = 34, padB = 34, padT = 12;
-  const max = Math.max(...pts.map((p) => p.wastePer100), baseline ?? 0) * 1.15;
-  const bw = (W - padL) / pts.length;
-  const y = (v: number) => padT + (H - padT - padB) * (1 - v / max);
-  const ticks = [0, max / 2, max].map((v) => Math.round(v));
-  const colour = (p: (typeof pts)[number]) => (p.interventionId ? "var(--good)" : flagged.has(p.itemId) ? "var(--bad)" : "var(--line)");
-
-  return (
-    <figure style={{ margin: 0 }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={`Waste per 100 plates for ${pts.length} meals. Highest ${fmt(Math.max(...pts.map((p) => p.wastePer100)))}.`}>
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={padL} x2={W} y1={y(t)} y2={y(t)} stroke="var(--line)" strokeWidth="1" />
-            <text x={padL - 6} y={y(t) + 4} textAnchor="end" fontSize="11" fill="var(--muted)">{t}</text>
-          </g>
-        ))}
-        {pts.map((p, i) => {
-          const h = H - padB - y(p.wastePer100);
-          return (
-            <g key={i}>
-              <rect x={padL + i * bw + bw * 0.15} y={y(p.wastePer100)} width={bw * 0.7} height={h} rx="3" fill={colour(p)}
-                style={{ transformOrigin: `0 ${H - padB}px`, animation: `growY 700ms cubic-bezier(.2,.8,.2,1) ${300 + i * 35}ms both` }}>
-                <title>{`${p.name}, ${niceDate(p.date)}: ${fmt(p.wastePer100)} kg per 100 plates${p.interventionId ? " (after change)" : ""}`}</title>
-              </rect>
-              {(i % Math.ceil(pts.length / 8) === 0 || i === pts.length - 1) && (
-                <text x={padL + i * bw + bw / 2} y={H - padB + 16} textAnchor="middle" fontSize="11" fill="var(--muted)">{niceDate(p.date)}</text>
-              )}
-            </g>
-          );
-        })}
-        {baseline !== undefined && (
-          <g>
-            <line x1={padL} x2={W} y1={y(baseline)} y2={y(baseline)} stroke="var(--ink)" strokeDasharray="6 4" strokeWidth="1.5" />
-            <text x={padL + 6} y={y(baseline) - 6} textAnchor="start" fontSize="12" fill="var(--ink)" fontWeight="600">baseline {fmt(baseline)}</text>
-          </g>
-        )}
-      </svg>
-      <figcaption className="row small muted" style={{ gap: 14, marginTop: 6 }}>
-        <span className="row" style={{ gap: 6 }}><Swatch c="var(--bad)" /> Flagged dish</span>
-        <span className="row" style={{ gap: 6 }}><Swatch c="var(--good)" /> After a change</span>
-        <span className="row" style={{ gap: 6 }}><Swatch c="var(--line)" /> Other dishes</span>
-        <span className="row" style={{ gap: 6 }}><span aria-hidden="true" style={{ width: 18, borderTop: "2px dashed var(--ink)" }} /> Baseline</span>
-      </figcaption>
-    </figure>
-  );
-}
-
-const Swatch = ({ c }: { c: string }) => <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 3, background: c, display: "inline-block" }} />;
-
-interface AgentAlert { alertId: string; kind: "suggestion" | "outcome" | "reminder"; title: string; body: string; link?: string; createdAt: string; emailed: boolean }
-
-const ALERT_ICON: Record<AgentAlert["kind"], string> = { suggestion: "💡", outcome: "📈", reminder: "⏰" };
-
-const ago = (iso: string) => {
-  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
-  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-};
-
-/** What the agent sent by itself: suggestions waiting, trial results, missed-day reminders. */
-function AlertsCard({ alerts, onChecked }: { alerts: AgentAlert[]; onChecked: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  async function checkNow() {
-    setBusy(true);
-    setNote(null);
-    try {
-      const r = await api<{ message: string }>("POST", "/alerts/check-now");
-      setNote(r.message);
-      onChecked();
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : "Could not run the check.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Card delay={420}>
-      <div className="row between">
-        <h2>Agent notifications</h2>
-        <button className="btn btn-ghost" style={{ minHeight: 40 }} onClick={checkNow} disabled={busy}>{busy ? "Checking…" : "Run today's check now"}</button>
-      </div>
-      <p className="small muted">The agent emails these to the committee (Amazon SNS). Every day at 3 pm it checks whether the meal was logged (EventBridge Scheduler).</p>
-      {note && <p className="note note-info" role="status">{note}</p>}
-      {alerts.length === 0 && <p className="muted">Nothing yet. Log a meal and the agent will report here.</p>}
-      <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 10 }}>
-        {alerts.map((a) => (
-          <li key={a.alertId} style={{ display: "grid", gridTemplateColumns: "28px 1fr", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--line)" }}>
-            <span aria-hidden="true" style={{ fontSize: 20 }}>{ALERT_ICON[a.kind]}</span>
-            <span className="stack" style={{ gap: 2 }}>
-              <span className="row between" style={{ gap: 8 }}>
-                <strong>{a.title}</strong>
-                <span className="small muted">{ago(a.createdAt)}{a.emailed ? " · emailed" : ""}</span>
-              </span>
-              <span className="small">{a.body}</span>
-              {a.link && <a className="small" href={a.link}>Open →</a>}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </Card>
   );
 }

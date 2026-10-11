@@ -43,7 +43,6 @@ export default function Review({ recId }: { recId: string }) {
     <>
       <div className="row between" style={{ alignItems: "flex-end" }}>
         <div className="stack" style={{ gap: 4 }}>
-          <a href="#/dashboard" className="small">← Dashboard</a>
           <h1>{e.targetItem.name}: what should change?</h1>
         </div>
         <div className="row"><SimBadge show={rec.isSimulated} /><Status value={rec.status} /></div>

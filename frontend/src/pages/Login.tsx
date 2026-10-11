@@ -50,18 +50,14 @@ export default function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit} style={{ gap: 20 }}>
-        <div className="stack" style={{ gap: 6 }}>
-          <span className="brand"><span className="brand-mark" aria-hidden="true">↻</span> MessLoop</span>
-          <h1 style={{ fontSize: 28 }}>Less food in the bin, one decision at a time</h1>
-          <p className="muted">Measure leftovers, spot dishes that keep coming back, try a change, see if it worked.</p>
-        </div>
+        <h1 style={{ fontSize: 28 }}>Log in</h1>
 
         {demoMode && (
           <div className="stack" style={{ gap: 10, padding: 16, borderRadius: 12, background: "var(--warn-soft)" }}>
             <p><strong>Judges and visitors:</strong> try the demo — no code needed. All demo data is simulated.</p>
-            <div className="seg" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))" }}>
+            <div className="seg" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))" }}>
               {ROLES.map((r) => (
-                <button key={r.role} type="button" className="btn" style={{ minHeight: 48 }} disabled={busy} onClick={() => tryDemo(r.role)}>
+                <button key={r.role} type="button" className="btn" style={{ minHeight: 48, padding: "0 12px", whiteSpace: "nowrap" }} disabled={busy} onClick={() => tryDemo(r.role)}>
                   {r.label}
                 </button>
               ))}
