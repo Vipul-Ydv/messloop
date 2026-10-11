@@ -10,10 +10,49 @@ export const PERIOD: Period = "lunch";
 export const UNIT: Unit = "kg";
 
 export const ITEMS: FoodItem[] = [
-  { itemId: "aloo-gobi", name: "Aloo Gobi", unit: "kg", category: "dry sabzi", isSimulated: true },
-  { itemId: "chole", name: "Chole", unit: "kg", category: "dry sabzi", isSimulated: true },
-  { itemId: "mixed-veg", name: "Mixed Veg", unit: "kg", category: "dry sabzi", isSimulated: true },
-  { itemId: "soyabean-curry", name: "Soyabean Curry", unit: "kg", category: "dry sabzi", isSimulated: true },
+  { itemId: "aloo-gobi", name: "Aloo Gobi", hindi: "आलू गोभी", meals: ["lunch"], unit: "kg", category: "dry sabzi", isSimulated: true },
+  { itemId: "chole", name: "Chole", hindi: "छोले", meals: ["lunch", "dinner"], unit: "kg", category: "dry sabzi", isSimulated: true },
+  { itemId: "mixed-veg", name: "Mixed Veg", hindi: "मिक्स वेज", meals: ["lunch"], unit: "kg", category: "dry sabzi", isSimulated: true },
+  { itemId: "soyabean-curry", name: "Soyabean Curry", hindi: "सोयाबीन करी", meals: ["lunch"], unit: "kg", category: "dry sabzi", isSimulated: true },
+];
+
+/**
+ * Every dish on our mess's real weekly menu (breakfast, lunch, dinner). These are real,
+ * not simulated: they let staff log a real meal. All weighed in kg so the voice call's
+ * "kitne kilo" question works for each. Chole is already in ITEMS above.
+ */
+const m = (itemId: string, name: string, hindi: string, meals: Period[], category: string): FoodItem => ({ itemId, name, hindi, meals, unit: "kg", category, isSimulated: false });
+export const MENU_ITEMS: FoodItem[] = [
+  m("aloo-paratha", "Aloo Paratha", "आलू पराठा", ["breakfast"], "bread"),
+  m("chana", "Chana", "चना", ["breakfast"], "sabzi"),
+  m("suji", "Suji", "सूजी", ["breakfast"], "sweet"),
+  m("aloo-sabzi", "Aloo Sabzi", "आलू सब्ज़ी", ["breakfast"], "sabzi"),
+  m("paratha", "Paratha", "पराठा", ["breakfast"], "bread"),
+  m("paneer-paratha", "Paneer Paratha", "पनीर पराठा", ["breakfast"], "bread"),
+  m("poha", "Poha", "पोहा", ["breakfast"], "snack"),
+  m("pasta", "Pasta", "पास्ता", ["breakfast"], "snack"),
+  m("aloo-puri", "Aloo Puri", "आलू पूरी", ["breakfast"], "bread"),
+  m("chana-paratha", "Chana Paratha", "चना पराठा", ["breakfast"], "bread"),
+  m("chole-bhature", "Chole Bhature", "छोले भटूरे", ["breakfast"], "bread"),
+  m("arhar-dal", "Arhar Dal", "अरहर दाल", ["lunch"], "dal"),
+  m("rajma", "Rajma", "राजमा", ["lunch", "dinner"], "dal"),
+  m("mix-daal", "Mix Daal", "मिक्स दाल", ["lunch"], "dal"),
+  m("kale-chana-dal", "Kale Chana Dal", "काले चने की दाल", ["lunch"], "dal"),
+  m("kali-daal", "Kali Daal", "काली दाल", ["lunch"], "dal"),
+  m("curry", "Curry", "करी", ["lunch"], "sabzi"),
+  m("pulao", "Pulao", "पुलाव", ["lunch"], "rice"),
+  m("raita", "Raita", "रायता", ["lunch"], "side"),
+  m("salad", "Salad", "सलाद", ["lunch"], "side"),
+  m("chawal", "Chawal", "चावल", ["lunch", "dinner"], "rice"),
+  m("seasonal-sabzi", "Seasonal Sabzi", "मौसमी सब्ज़ी", ["dinner"], "sabzi"),
+  m("daal", "Daal", "दाल", ["dinner"], "dal"),
+  m("roti", "Roti", "रोटी", ["dinner"], "bread"),
+  m("puri", "Puri", "पूरी", ["dinner"], "bread"),
+  m("kheer", "Kheer", "खीर", ["dinner"], "sweet"),
+  m("paneer", "Paneer", "पनीर", ["dinner"], "sabzi"),
+  m("sweet-dish", "Sweet Dish", "मीठा", ["dinner"], "sweet"),
+  m("aloo-badi", "Aloo Badi", "आलू बड़ी", ["dinner"], "sabzi"),
+  m("aloo-gutke", "Aloo Gutke", "आलू गुटके", ["dinner"], "sabzi"),
 ];
 
 export interface SeedRecord {

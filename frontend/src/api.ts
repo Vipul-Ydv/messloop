@@ -63,7 +63,7 @@ export async function api<T = any>(method: "GET" | "POST", path: string, body?: 
 
 // ------------------------------------------------------------------ shapes
 
-export interface Item { itemId: string; name: string; unit: string; isSimulated: boolean }
+export interface Item { itemId: string; name: string; unit: string; isSimulated: boolean; hindi?: string; meals?: string[] }
 
 export interface WasteRecord {
   recordId: string;

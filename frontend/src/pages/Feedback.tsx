@@ -6,7 +6,7 @@ import { ApiError, api } from "../api.ts";
 import { Card, ErrorNote, Loading, niceDate } from "../ui.tsx";
 
 interface Options {
-  items: { itemId: string; name: string }[];
+  items: { itemId: string; name: string; hindi?: string; meals?: string[] }[];
   suggestedItemId: string | null;
   suggestedDate: string | null;
   reasons: { id: string; label: string; hindi: string }[];
@@ -20,6 +20,10 @@ const FACES = [
   { n: 4, face: "🙂", label: "Achha" },
   { n: 5, face: "😋", label: "Bahut badhiya" },
 ];
+
+// Offer replacements served at the same meal; with no meal info, offer everything.
+const sharesMeal = (a: { meals?: string[] }, b?: { meals?: string[] }) =>
+  !b?.meals?.length || !a.meals?.length || a.meals.some((m) => b.meals!.includes(m));
 
 const votedKey = (itemId: string) => `messloop.voted.${itemId}.${new Date().toLocaleDateString("en-CA")}`;
 const hasVoted = (itemId: string) => { try { return localStorage.getItem(votedKey(itemId)) === "1"; } catch { return false; } };
@@ -138,7 +142,7 @@ export default function Feedback() {
             <h2 lang="hi">Iski jagah kya banna chahiye?</h2>
             <p className="small muted">What should be made instead? Optional. Your vote goes straight into the evidence the agent uses.</p>
             <div className="row" style={{ gap: 8 }}>
-              {opts.items.filter((i) => i.itemId !== itemId).map((i) => {
+              {opts.items.filter((i) => i.itemId !== itemId && sharesMeal(i, dish)).map((i) => {
                 const on = instead === i.itemId;
                 return (
                   <button key={i.itemId} type="button" onClick={() => setInstead(on ? null : i.itemId)} aria-pressed={on}

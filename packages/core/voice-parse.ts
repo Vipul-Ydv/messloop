@@ -5,6 +5,8 @@
 
 export interface ParsedFields {
   itemId: string | null;
+  /** Every dish heard in the first answer, in order; the form starts with the first. */
+  dishes: string[];
   preparedQty: number | null;
   leftoverQty: number | null;
   servings: number | null;
@@ -41,15 +43,38 @@ export function firstNumber(text: string): number | null {
   return /साढ़े|साढे/.test(t) && Number.isInteger(n) ? n + 0.5 : n;
 }
 
-export function matchDish(text: string, items: { itemId: string; name: string }[]): string | null {
+type DishItem = { itemId: string; name: string; hindi?: string };
+
+/**
+ * Every dish named in an answer, in the order spoken. Names overlap on a real menu
+ * ("छोले" inside "छोले भटूरे", "दाल" inside "अरहर दाल"), so longer names claim their
+ * words first and a shorter name inside them doesn't count again.
+ */
+export function matchDishes(text: string, items: DishItem[]): string[] {
   const t = text.toLowerCase();
-  const hits = items.filter((i) => [i.name.toLowerCase(), ...(DISH_ALIASES[i.itemId] ?? [])].some((a) => t.includes(a.toLowerCase())));
-  return hits.length === 1 ? hits[0].itemId : null;
+  const found: { itemId: string; start: number; end: number }[] = [];
+  for (const i of items) {
+    const names = [i.name, i.hindi ?? "", ...(DISH_ALIASES[i.itemId] ?? [])].filter(Boolean).map((a) => a.toLowerCase());
+    for (const n of names) {
+      for (let at = t.indexOf(n); at !== -1; at = t.indexOf(n, at + 1)) found.push({ itemId: i.itemId, start: at, end: at + n.length });
+    }
+  }
+  found.sort((a, b) => (b.end - b.start) - (a.end - a.start));
+  const kept: typeof found = [];
+  for (const f of found) if (!kept.some((k) => f.start < k.end && k.start < f.end)) kept.push(f);
+  return [...new Set(kept.sort((a, b) => a.start - b.start).map((k) => k.itemId))];
 }
 
-export function parseAnswers(transcripts: Record<string, string>, items: { itemId: string; name: string }[]) {
+/** The first dish named in an answer, or null. */
+export function matchDish(text: string, items: DishItem[]): string | null {
+  return matchDishes(text, items)[0] ?? null;
+}
+
+export function parseAnswers(transcripts: Record<string, string>, items: DishItem[]) {
+  const dishes = transcripts.dish ? matchDishes(transcripts.dish, items) : [];
   const fields: ParsedFields = {
-    itemId: transcripts.dish ? matchDish(transcripts.dish, items) : null,
+    itemId: dishes[0] ?? null,
+    dishes,
     preparedQty: transcripts.prepared ? firstNumber(transcripts.prepared) : null,
     leftoverQty: transcripts.leftover ? firstNumber(transcripts.leftover) : null,
     servings: transcripts.servings ? firstNumber(transcripts.servings) : null,

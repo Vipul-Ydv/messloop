@@ -12,6 +12,10 @@ export interface FoodItem {
   unit: Unit;
   category?: string;
   costPerUnit?: number;
+  /** The name mess staff use, in Devanagari; also matched in voice answers. */
+  hindi?: string;
+  /** Meals it is usually served at, so forms can list those dishes first. */
+  meals?: Period[];
   isSimulated: boolean;
 }
 

@@ -533,7 +533,7 @@ export async function seed(includeLatest: boolean) {
   const removed = await deleteAllUnder(HPK);
   const items: Record<string, unknown>[] = [
     { PK: HPK, SK: "META", hostelId: seedData.HOSTEL_ID, name: "Demo Hostel", threshold: DEFAULT_THRESHOLD, isSimulated: true },
-    ...seedData.ITEMS.map((i) => ({ PK: HPK, SK: `ITEM#${i.itemId}`, ...i })),
+    ...[...seedData.ITEMS, ...seedData.MENU_ITEMS].map((i) => ({ PK: HPK, SK: `ITEM#${i.itemId}`, ...i })),
     ...seedData.seedRecords(includeLatest).map((r) => ({
       PK: HPK,
       SK: `WASTE#${r.date}#${seedData.PERIOD}#${r.itemId}`,

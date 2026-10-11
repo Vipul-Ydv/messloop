@@ -20,7 +20,7 @@ export async function options() {
   const [items, waste] = await Promise.all([query(HPK, "ITEM#"), query(HPK, "WASTE#")]);
   const latest = waste.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (a.loggedAt ?? "") < (b.loggedAt ?? "") ? 1 : -1))[0];
   return {
-    items: items.map((i: any) => ({ itemId: i.itemId, name: i.name })).sort((a: any, b: any) => a.name.localeCompare(b.name)),
+    items: items.map((i: any) => ({ itemId: i.itemId, name: i.name, hindi: i.hindi, meals: i.meals ?? [] })).sort((a: any, b: any) => a.name.localeCompare(b.name)),
     suggestedItemId: latest?.itemId ?? null,
     suggestedDate: latest?.date ?? null,
     reasons: REASONS,
@@ -83,7 +83,11 @@ async function voteInstead(itemId: string, instead: string) {
   const SK = `POLL#replace-${itemId}`;
   let poll = await get(HPK, SK);
   if (!poll) {
-    const others = (await query(HPK, "ITEM#")).map((i: any) => i.itemId).filter((id: string) => id !== itemId);
+    // Options: dishes served at the same meal, so the agent compares like with like.
+    const all = await query(HPK, "ITEM#");
+    const meals: string[] = all.find((i: any) => i.itemId === itemId)?.meals ?? [];
+    const sameMeal = all.filter((i: any) => i.itemId !== itemId && (!meals.length || (i.meals ?? []).some((x: string) => meals.includes(x))));
+    const others = [...new Set([...sameMeal.map((i: any) => i.itemId), instead])];
     poll = { PK: HPK, SK, pollId: `replace-${itemId}`, targetItemId: itemId, counts: Object.fromEntries(others.map((id: string) => [id, 0])), isSimulated: false };
   }
   const counts = { ...poll.counts, [instead]: (poll.counts?.[instead] ?? 0) + 1 };

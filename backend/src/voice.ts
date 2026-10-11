@@ -15,7 +15,7 @@ const polly = new PollyClient({});
 const streaming = new TranscribeStreamingClient({});
 
 export const QUESTIONS = [
-  { id: "dish", text: "नमस्ते! आज कौन सी सब्ज़ी बनी?", english: "Hello! Which sabzi was made today?" },
+  { id: "dish", text: "नमस्ते! आज खाने में क्या बना था?", english: "Hello! What was made for this meal?" },
   { id: "prepared", text: "कुल कितने किलो बना था?", english: "How many kg was cooked in total?" },
   { id: "leftover", text: "सर्विस के बाद बर्तनों में कितने किलो बचा?", english: "After service, how many kg were left in the vessels?" },
   { id: "servings", text: "आज कितने बच्चों ने खाया? यानी कितनी प्लेटें गईं?", english: "How many students ate today, that is, how many plates went out?" },
@@ -131,7 +131,7 @@ export async function extractAnswers(body: any) {
   const transcripts: Record<string, string> = {};
   for (const q of QUESTIONS) if (typeof raw[q.id] === "string") transcripts[q.id] = raw[q.id].slice(0, 500);
 
-  const items = (await query(HPK, "ITEM#")).map((i: any) => ({ itemId: i.itemId, name: i.name }));
+  const items = (await query(HPK, "ITEM#")).map((i: any) => ({ itemId: i.itemId, name: i.name, hindi: i.hindi }));
   const { fields, unread } = parseAnswers(transcripts, items);
   if (unread.length === 0) return { fields, source: "rules" };
 
@@ -139,5 +139,6 @@ export async function extractAnswers(body: any) {
   const key = { dish: "itemId", prepared: "preparedQty", leftover: "leftoverQty", servings: "servings" } as const;
   const merged = { ...fields };
   for (const q of unread) (merged as any)[key[q]] = (model.fields as any)[key[q]];
+  if (merged.itemId && !merged.dishes.includes(merged.itemId)) merged.dishes = [merged.itemId, ...merged.dishes];
   return { fields: merged, source: model.source === "ai" ? "rules+ai" : "rules", note: model.note };
 }
